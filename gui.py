@@ -134,6 +134,11 @@ class VaultApp(ctk.CTk):
     def _clipboard_keys(event):
         if not (event.state & 0x0004):        # Control must be held
             return None
+        # If the keysym is already the Latin letter, the DEFAULT binding handles
+        # it — doing it again here would paste/copy twice. Only step in when the
+        # keysym is not the Latin letter (e.g. a Thai layout), matched by keycode.
+        if (event.keysym or "").lower() in ("a", "c", "v", "x"):
+            return None
         key = {65: "all", 67: "<<Copy>>", 86: "<<Paste>>", 88: "<<Cut>>"}.get(
             event.keycode)                    # A / C / V / X physical keys
         if key is None:
@@ -795,6 +800,14 @@ class VaultApp(ctk.CTk):
             return False
         return True
 
+    @staticmethod
+    def _clean_folder_id(raw):
+        """Accept a pasted Folder ID or a full Drive URL; return just the ID."""
+        raw = (raw or "").strip()
+        if "/folders/" in raw:
+            raw = raw.split("/folders/", 1)[1]
+        return raw.split("?", 1)[0].split("/", 1)[0].strip()
+
     def _build_setup(self):
         """Bundle the OAuth client + allow-list so a recipient self-configures and
         becomes a full sender/receiver. Returns None if not applicable."""
@@ -847,7 +860,7 @@ class VaultApp(ctk.CTk):
         dlg = ctk.CTkInputDialog(
             title="Google Drive folder",
             text="วาง Folder ID ในไดรฟ์ของคุณ (เว้นว่างได้ = เก็บที่ My Drive):")
-        folder = (dlg.get_input() or "").strip()
+        folder = self._clean_folder_id(dlg.get_input())
 
         self.drive_method = "oauth"
         self.drive_oauth_client = f
@@ -875,7 +888,7 @@ class VaultApp(ctk.CTk):
         dlg = ctk.CTkInputDialog(
             title="Shared Drive folder",
             text="วาง Folder ID ใน Shared Drive (Service Account ต้องเป็นสมาชิก):")
-        folder = (dlg.get_input() or "").strip()
+        folder = self._clean_folder_id(dlg.get_input())
 
         self.drive_method = "sa"
         self.drive_sa_json = f

@@ -11,6 +11,14 @@ recovery_key_*.json
 recovery_share_*.json
 *.seed
 
+# Google Drive credentials / tokens — NEVER commit (these are secrets)
+drive_token.json
+client_secret*.json
+*oauth*.json
+*service*account*.json
+*-sa-*.json
+*.credentials.json
+
 # Python
 __pycache__/
 *.pyc

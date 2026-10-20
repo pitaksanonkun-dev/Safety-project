@@ -39,19 +39,50 @@ MODE_OFFLINE = 0
 MODE_ONLINE = 1
 
 
-def _build_payload(blob: bytes, name_hint: str, online: bool, drive) -> bytes:
-    """Offline: mode + blob. Online: upload blob to Drive, keep a small pointer."""
-    if not online:
-        return bytes([MODE_OFFLINE]) + blob
-    if drive is None:
-        raise RuntimeError("ยังไม่ได้ตั้งค่า Google Drive — ไม่สามารถเข้ารหัสแบบ Online ได้")
-    drive_id = drive.upload_bytes(blob, name_hint + ".dat")
-    pointer = json.dumps({"v": 1, "drive_id": drive_id}).encode("utf-8")
-    return bytes([MODE_ONLINE]) + pointer
+def _pdf_bytes_from_payload(payload: bytes) -> tuple[bytes, str]:
+    """Render a verse-card PDF with `payload` embedded; return (bytes, verse_name)."""
+    doc, en_ref = verse_card.render_card_doc()
+    try:
+        doc.embfile_add(PAYLOAD_NAME, payload, filename=ATTACH_FILENAME, desc="resource")
+        return doc.tobytes(deflate=True), en_ref
+    finally:
+        doc.close()
+
+
+def _jpg_bytes_from_payload(payload: bytes, zoom: float = 3.0) -> tuple[bytes, str]:
+    """Render a verse-card JPG with `payload` appended; return (bytes, verse_name)."""
+    doc, en_ref = verse_card.render_card_doc()
+    try:
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        try:
+            jpg = pix.tobytes("jpg", jpg_quality=92)
+        except TypeError:                       # older PyMuPDF signature
+            jpg = pix.tobytes("jpeg")
+    finally:
+        doc.close()
+    return jpg + payload + JPG_MARKER + len(payload).to_bytes(8, "big"), en_ref
+
+
+def _extract_payload_from_bytes(data: bytes, kind: str) -> bytes:
+    """Pull the embedded payload out of a disguise file given as raw bytes."""
+    data = bytes(data)
+    if kind == "jpg":
+        if len(data) < JPG_TRAILER_LEN or data[-JPG_TRAILER_LEN:-8] != JPG_MARKER:
+            raise ValueError("ไฟล์ JPG บน Google Drive ไม่ถูกต้อง")
+        n = int.from_bytes(data[-8:], "big")
+        return data[-(JPG_TRAILER_LEN + n):-JPG_TRAILER_LEN]
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        if PAYLOAD_NAME not in doc.embfile_names():
+            raise ValueError("ไฟล์ PDF บน Google Drive ไม่มีข้อมูลที่ซ่อนไว้")
+        return bytes(doc.embfile_get(PAYLOAD_NAME))
+    finally:
+        doc.close()
 
 
 def _resolve_payload(payload: bytes, drive) -> bytes:
-    """Return the encrypted blob from a payload, downloading from Drive if online."""
+    """Return the encrypted blob from a payload, following an online pointer
+    (download the full PDF/JPG from Drive and re-extract) if needed."""
     payload = bytes(payload)
     # Backward compatibility: old files embedded the raw blob with no mode byte.
     if payload[:len(file_crypto.MAGIC)] == file_crypto.MAGIC:
@@ -64,60 +95,57 @@ def _resolve_payload(payload: bytes, drive) -> bytes:
         if drive is None:
             raise RuntimeError(
                 "ไฟล์นี้เป็นแบบ Online — ต้องตั้งค่า Google Drive ก่อนจึงจะถอดรหัสได้")
-        return drive.download_bytes(info["drive_id"])
+        full = drive.download_bytes(info["drive_id"])          # a real PDF/JPG
+        inner = _extract_payload_from_bytes(full, info.get("kind", "pdf"))
+        return _resolve_payload(inner, drive)                  # -> offline -> blob
     raise ValueError("payload mode ไม่รู้จัก (ไฟล์อาจเสียหาย)")
+
+
+def _encrypt_file(src, out_dir, password, online, drive, kind: str) -> Path:
+    """Shared encrypt path for kind in {'pdf','jpg'}.
+    Offline: the disguise file holds the full data.
+    Online: the FULL disguise PDF/JPG is uploaded to Drive; the LOCAL file is a
+    small pointer PDF/JPG of the same kind that redirects to it."""
+    src = Path(src)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    make_bytes = _jpg_bytes_from_payload if kind == "jpg" else _pdf_bytes_from_payload
+    suffix = "." + kind
+    mime = "image/jpeg" if kind == "jpg" else "application/pdf"
+
+    blob = file_crypto.make_blob(src.read_bytes(), src.name, password)
+    offline_payload = bytes([MODE_OFFLINE]) + blob
+
+    if not online:
+        out_bytes, en_ref = make_bytes(offline_payload)
+    else:
+        if drive is None:
+            raise RuntimeError("ยังไม่ได้ตั้งค่า Google Drive — เข้ารหัสแบบ Online ไม่ได้")
+        # full disguise file (same chosen format) goes to Drive — openable, data inside
+        full_bytes, en_full = make_bytes(offline_payload)
+        drive_id = drive.upload_bytes(full_bytes, en_full + suffix, mime=mime)
+        pointer = bytes([MODE_ONLINE]) + json.dumps(
+            {"v": 1, "drive_id": drive_id, "kind": kind}).encode("utf-8")
+        out_bytes, en_ref = make_bytes(pointer)                # small local pointer
+
+    out_path = file_crypto._unique_path(out_dir / (en_ref + suffix))
+    out_path.write_bytes(out_bytes)
+    return out_path
 
 
 def encrypt_file_to_pdf(src: str | Path, out_dir: str | Path, password: str,
                         online: bool = False, drive=None) -> Path:
-    """Encrypt `src` and emit a disguise PDF (<verse>.pdf) in out_dir.
-    online=True uploads the blob to Google Drive and embeds only a small pointer.
-    The original file is left untouched."""
-    src = Path(src)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    blob = file_crypto.make_blob(src.read_bytes(), src.name, password)
-
-    # The visible PDF is named after the verse (an English Bible abbreviation);
-    # the original file name is stored INSIDE the encrypted blob.
-    doc, en_ref = verse_card.render_card_doc()  # sharp vector card + file name
-    try:
-        payload = _build_payload(blob, en_ref, online, drive)
-        doc.embfile_add(PAYLOAD_NAME, payload, filename=ATTACH_FILENAME, desc="resource")
-        out_path = file_crypto._unique_path(out_dir / (en_ref + ".pdf"))
-        doc.save(str(out_path))
-    finally:
-        doc.close()
-    return out_path
+    """Encrypt `src` to a disguise PDF. Online: upload a full PDF to Drive and
+    keep a small pointer PDF locally. The original file is left untouched."""
+    return _encrypt_file(src, out_dir, password, online, drive, "pdf")
 
 
 def encrypt_file_to_jpg(src: str | Path, out_dir: str | Path, password: str,
                         online: bool = False, drive=None, zoom: float = 3.0) -> Path:
-    """Encrypt `src` and emit a disguise JPG (<verse>.jpg) in out_dir: the verse
-    card as an image with the payload appended. Original untouched.
-    online=True uploads the blob to Drive and appends only a small pointer."""
-    src = Path(src)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    blob = file_crypto.make_blob(src.read_bytes(), src.name, password)
-
-    doc, en_ref = verse_card.render_card_doc()
-    try:
-        pix = doc[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        try:
-            jpg = pix.tobytes("jpg", jpg_quality=92)
-        except TypeError:                       # older PyMuPDF signature
-            jpg = pix.tobytes("jpeg")
-    finally:
-        doc.close()
-
-    payload = _build_payload(blob, en_ref, online, drive)
-    out_bytes = jpg + payload + JPG_MARKER + len(payload).to_bytes(8, "big")
-    out_path = file_crypto._unique_path(out_dir / (en_ref + ".jpg"))
-    out_path.write_bytes(out_bytes)
-    return out_path
+    """Encrypt `src` to a disguise JPG. Online: upload a full JPG to Drive and
+    keep a small pointer JPG locally. The original file is left untouched."""
+    return _encrypt_file(src, out_dir, password, online, drive, "jpg")
 
 
 def is_disguise_jpg(path: str | Path) -> bool:

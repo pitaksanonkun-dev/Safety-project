@@ -86,7 +86,7 @@ def _jpg_bytes_from_payload(payload: bytes, qr_data: str | None = None,
         qr = qr_pointer.make_qr_image(qr_data, px=q)
         img.paste(qr, (pix.width - q - m, pix.height - q - m))
 
-    buf = io.BytesIO(); img.save(buf, "JPEG", quality=92)
+    buf = io.BytesIO(); img.save(buf, "JPEG", quality=72)   # ~half the file size
     jpg = buf.getvalue()
     return jpg + payload + JPG_MARKER + len(payload).to_bytes(8, "big"), en_ref
 

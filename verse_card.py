@@ -109,10 +109,10 @@ def _border_bytes_and_aspect():
     well under 1 MB; the verse text is vector and stays sharp regardless."""
     img = Image.open(TEMPLATE_PATH).convert("RGB")
     W, H = img.size
-    target = 1600                     # enough for crisp on-screen / print
+    target = 1200                     # smaller border image -> ~half file size
     if W != target:
         img = img.resize((target, round(H * target / W)), Image.LANCZOS)
-    buf = BytesIO(); img.save(buf, format="JPEG", quality=85)
+    buf = BytesIO(); img.save(buf, format="JPEG", quality=78)
     return buf.getvalue(), H / W
 
 
@@ -159,25 +159,29 @@ def render_card_doc(page_w: float = 520.0,
     # verse — auto-fit font size so the whole thing fits uncut
     vfile = _VERSE_FONT
     vfont = fitz.Font(fontfile=vfile)
-    body = "\u201c" + verse_txt + "\u201d"
     top = y + page_h * 0.05
     bot = page_h - my - page_h * 0.075           # leave room for the reference
     size = int(page_w * 0.072)
     while size >= 16:
-        lines = _wrap(body, vfont, size, inner_w)
+        # wrap the plain verse (slightly narrower to leave room for the quotes),
+        # so the quotation marks never land on a line by themselves
+        lines = _wrap(verse_txt, vfont, size, inner_w - size)
         line_h = size * 1.9
         if line_h * len(lines) <= (bot - top):
             break
         size -= 1
+    if lines:
+        lines[0] = "\u201c" + lines[0]
+        lines[-1] = lines[-1] + "\u201d"
     block_h = line_h * len(lines)
     vy = top + max(0.0, ((bot - top) - block_h) / 2) + size  # first baseline
     for ln in lines:
         _center(page, ln, vy, vfile, "AG", size, (0.17, 0.19, 0.24), page_w)
         vy += line_h
 
-    # reference (larger), nudged up to clear the bottom florals
-    _center(page, f"\u2014  {ref}", page_h - my - page_h * 0.055,
-            _REF_FONT, "HV", page_w * 0.038, (0.43, 0.47, 0.55), page_w)
+    # reference \u2014 which verse it is (bigger), nudged up to clear the florals
+    _center(page, f"\u2014  {ref}", page_h - my - page_h * 0.05,
+            _REF_FONT, "HV", page_w * 0.050, (0.33, 0.37, 0.46), page_w)
 
     return doc, en_ref
 

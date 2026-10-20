@@ -695,14 +695,15 @@ class VaultApp(ctk.CTk):
         win = ctk.CTkToplevel(self)
         win.title("อีเมลที่อนุญาตถอดรหัส Online")
         win.geometry("480x440")
-        win.configure(fg_color="#f3f5f8")
+        win.configure(fg_color="#141414")          # dark background
 
         ctk.CTkLabel(win, text="อีเมล Gmail ที่อนุญาตให้ถอดรหัสไฟล์ Online",
-                     font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(14, 2))
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#f2f4f7").pack(pady=(14, 2))
         ctk.CTkLabel(win, text="เว้นว่าง = เฉพาะบัญชีของคุณเองเท่านั้น",
-                     text_color="gray50").pack(pady=(0, 8))
+                     text_color="#aab2bd").pack(pady=(0, 8))
 
-        listframe = ctk.CTkScrollableFrame(win, height=210)
+        listframe = ctk.CTkScrollableFrame(win, height=210, fg_color="#1e1e1e")
         listframe.pack(fill="both", expand=True, padx=14, pady=4)
 
         def save():
@@ -714,12 +715,12 @@ class VaultApp(ctk.CTk):
                 w.destroy()
             if not self.allowed_emails:
                 ctk.CTkLabel(listframe, text="(ยังไม่มีอีเมล)",
-                             text_color="gray50").pack(pady=12)
+                             text_color="#aab2bd").pack(pady=12)
                 return
             for em in list(self.allowed_emails):
-                row = ctk.CTkFrame(listframe, fg_color="#ffffff", corner_radius=8)
+                row = ctk.CTkFrame(listframe, fg_color="#2b2d31", corner_radius=8)
                 row.pack(fill="x", pady=3, padx=2)
-                ctk.CTkLabel(row, text=em, anchor="w").pack(
+                ctk.CTkLabel(row, text=em, anchor="w", text_color="#f2f4f7").pack(
                     side="left", fill="x", expand=True, padx=(10, 8), pady=4)
                 ctk.CTkButton(row, text="ลบ", width=56, fg_color="#a3332f",
                               hover_color="#7d2420",

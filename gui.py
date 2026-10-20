@@ -112,9 +112,12 @@ class VaultApp(ctk.CTk):
         self.enc_out_dir = self.settings.get("enc_out_dir") or ""
         self.out_format = self.settings.get("out_format") or "PDF"   # "PDF" | "JPG"
         self.net_mode = self.settings.get("net_mode") or "Offline"   # "Online" | "Offline"
+        self.drive_method = self.settings.get("drive_method") or "oauth"  # "oauth" | "sa"
         self.drive_sa_json = self.settings.get("drive_sa_json") or ""
+        self.drive_oauth_client = self.settings.get("drive_oauth_client") or ""
         self.drive_folder_id = self.settings.get("drive_folder_id") or ""
-        self._drive_client = None            # cached DriveClient
+        self.drive_token_path = str(_APP_DIR / "drive_token.json")
+        self._drive_client = None            # cached Drive client
 
         self.container = ctk.CTkFrame(self, fg_color="transparent")
         self.container.pack(fill="both", expand=True)
@@ -248,7 +251,9 @@ class VaultApp(ctk.CTk):
         setmenu.add_command(label="เปิดโฟลเดอร์ปลายทาง   (Open output folder)",
                             command=self._menu_show_outdir)
         setmenu.add_separator()
-        setmenu.add_command(label="ตั้งค่า Google Drive API…   (Set up Drive)",
+        setmenu.add_command(label="ตั้งค่า Google Drive — บัญชีส่วนตัว (OAuth) ⭐   [แนะนำ]",
+                            command=self._menu_set_drive_oauth)
+        setmenu.add_command(label="ตั้งค่า Google Drive — Service Account (Shared Drive)…",
                             command=self._menu_set_drive)
         setmenu.add_command(label="ทดสอบการเชื่อมต่อ Google Drive   (Test connection)",
                             command=self._menu_test_drive)
@@ -626,68 +631,117 @@ class VaultApp(ctk.CTk):
         self._save_settings()
 
     # ---- Google Drive ------------------------------------------------
-    def _menu_set_drive(self):
+    def _drive_lib_ok(self) -> bool:
         if not _HAS_DRIVE_LIB:
             messagebox.showerror(
                 "Google Drive",
-                "ยังไม่มีไลบรารี Google API\nติดตั้งด้วย: pip install google-api-python-client google-auth")
+                "ยังไม่มีไลบรารี Google API\nติดตั้งด้วย:\n"
+                "pip install google-api-python-client google-auth google-auth-oauthlib")
+            return False
+        return True
+
+    def _menu_set_drive_oauth(self):
+        """Recommended: OAuth — uploads to the user's own Drive (has quota)."""
+        if not self._drive_lib_ok():
             return
         f = filedialog.askopenfilename(
-            title="เลือกไฟล์กุญแจ Service Account (.json) / Choose service-account JSON key",
-            filetypes=[("JSON key", "*.json"), ("All files", "*.*")])
+            title="เลือกไฟล์ OAuth Client (client_secret….json) / Choose OAuth client JSON",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")])
         if not f:
             return
         dlg = ctk.CTkInputDialog(
             title="Google Drive folder",
-            text="วาง Folder ID ปลายทางบน Google Drive (เว้นว่างได้ถ้าใช้ root ของ Shared Drive):")
+            text="วาง Folder ID ในไดรฟ์ของคุณ (เว้นว่างได้ = เก็บที่ My Drive):")
         folder = (dlg.get_input() or "").strip()
 
+        self.drive_method = "oauth"
+        self.drive_oauth_client = f
+        self.drive_folder_id = folder
+        self.settings["drive_method"] = "oauth"
+        self.settings["drive_oauth_client"] = f
+        self.settings["drive_folder_id"] = folder
+        self._save_settings()
+        self._drive_client = None
+        messagebox.showinfo(
+            "Google Drive (OAuth)",
+            "ครั้งแรกจะเปิดหน้าเว็บให้คุณ 'อนุญาต' การเข้าถึง Google Drive\n"
+            "เลือกบัญชี → กด Continue/อนุญาต จนเสร็จ แล้วกลับมาที่โปรแกรม")
+        self._menu_test_drive()      # triggers the browser consent once
+
+    def _menu_set_drive(self):
+        """Service Account — only works with a Shared Drive (Workspace)."""
+        if not self._drive_lib_ok():
+            return
+        f = filedialog.askopenfilename(
+            title="เลือกไฟล์กุญแจ Service Account (.json)",
+            filetypes=[("JSON key", "*.json"), ("All files", "*.*")])
+        if not f:
+            return
+        dlg = ctk.CTkInputDialog(
+            title="Shared Drive folder",
+            text="วาง Folder ID ใน Shared Drive (Service Account ต้องเป็นสมาชิก):")
+        folder = (dlg.get_input() or "").strip()
+
+        self.drive_method = "sa"
         self.drive_sa_json = f
         self.drive_folder_id = folder
+        self.settings["drive_method"] = "sa"
         self.settings["drive_sa_json"] = f
         self.settings["drive_folder_id"] = folder
         self._save_settings()
-        self._drive_client = None            # force rebuild
-        # verify immediately so the user knows if the API is reachable
+        self._drive_client = None
+        messagebox.showwarning(
+            "Service Account",
+            "โหมดนี้ใช้ได้เฉพาะ Shared Drive เท่านั้น\n"
+            "ถ้าใช้ Gmail ส่วนตัว (My Drive) จะขึ้น storageQuotaExceeded\n"
+            "แนะนำใช้ 'บัญชีส่วนตัว (OAuth)' แทน")
         self._menu_test_drive()
 
+    def _drive_configured(self) -> bool:
+        if self.drive_method == "oauth":
+            return bool(self.drive_oauth_client and Path(self.drive_oauth_client).is_file())
+        return bool(self.drive_sa_json and Path(self.drive_sa_json).is_file())
+
+    def _build_drive(self):
+        """Construct a Drive client (may open a browser once for OAuth)."""
+        if self.drive_method == "oauth":
+            return drive_client.DriveClientOAuth(
+                self.drive_oauth_client, self.drive_token_path, self.drive_folder_id)
+        return drive_client.DriveClient(self.drive_sa_json, self.drive_folder_id)
+
     def _get_drive(self):
-        """Build (and cache) a DriveClient from settings, or None if unconfigured."""
-        if not _HAS_DRIVE_LIB:
-            return None
-        if not self.drive_sa_json or not Path(self.drive_sa_json).is_file():
+        """Return a cached Drive client, or None if not configured. May build
+        (and trigger OAuth consent) — call from a worker thread when possible."""
+        if not _HAS_DRIVE_LIB or not self._drive_configured():
             return None
         if self._drive_client is None:
-            self._drive_client = drive_client.DriveClient(
-                self.drive_sa_json, self.drive_folder_id)
+            self._drive_client = self._build_drive()
         return self._drive_client
 
     def _menu_test_drive(self):
-        if not _HAS_DRIVE_LIB:
-            messagebox.showerror("Google Drive",
-                                 "ยังไม่มีไลบรารี Google API (ดูเมนูตั้งค่า Google Drive)")
+        if not self._drive_lib_ok():
             return
-        if not self.drive_sa_json or not Path(self.drive_sa_json).is_file():
+        if not self._drive_configured():
             messagebox.showwarning(
                 "Google Drive",
-                "ยังไม่ได้ผูก API\nไปที่ ตั้งค่า > ตั้งค่า Google Drive API… เพื่อเลือกไฟล์กุญแจก่อน")
+                "ยังไม่ได้ผูกบัญชี\nไปที่ ตั้งค่า > ตั้งค่า Google Drive — บัญชีส่วนตัว (OAuth)")
             return
         self.dash_status.configure(text="กำลังทดสอบการเชื่อมต่อ Google Drive…")
 
         def work():
-            drive = drive_client.DriveClient(self.drive_sa_json, self.drive_folder_id)
-            return drive.check()
+            self._drive_client = None
+            return self._get_drive().check()
 
         def done(email, err):
             if err is not None:
+                self._drive_client = None
                 self.dash_status.configure(text="เชื่อมต่อ Google Drive ไม่สำเร็จ")
                 messagebox.showerror(
                     "เชื่อมต่อ Google Drive ไม่ได้",
-                    "ส่งข้อมูลไป Google Drive ไม่ได้ กรุณาผูก API ใหม่\n"
-                    "(ตั้งค่า > ตั้งค่า Google Drive API…)\n\n"
+                    "ส่งข้อมูลไป Google Drive ไม่ได้ กรุณาผูกบัญชีใหม่\n"
+                    "(ตั้งค่า > ตั้งค่า Google Drive — บัญชีส่วนตัว (OAuth))\n\n"
                     f"รายละเอียด: {err}")
             else:
-                self._drive_client = None     # rebuild with fresh creds next use
                 self.dash_status.configure(text="✓ เชื่อมต่อ Google Drive สำเร็จ")
                 messagebox.showinfo("Google Drive",
                                     f"เชื่อมต่อสำเร็จ ✔\nบัญชี: {email}")
@@ -769,12 +823,11 @@ class VaultApp(ctk.CTk):
             return
 
         online = (self.net_mode == "Online")
-        drive = self._get_drive() if online else None
-        if online and drive is None:
+        if online and not self._drive_configured():
             messagebox.showwarning(
                 "Online mode",
                 "โหมด Online ต้องตั้งค่า Google Drive ก่อน\n"
-                "ไปที่ ตั้งค่า > ตั้งค่า Google Drive API… (หรือเลือกโหมด Offline)")
+                "ไปที่ ตั้งค่า > ตั้งค่า Google Drive — บัญชีส่วนตัว (OAuth) (หรือเลือก Offline)")
             return
 
         self.dash_status.configure(
@@ -785,8 +838,10 @@ class VaultApp(ctk.CTk):
                    else pdf_disguise.encrypt_file_to_pdf)
 
         def work():
+            drive = None
             if online:
-                drive.check()        # verify reachable before sending anything
+                drive = self._get_drive()   # built here (may open browser once)
+                drive.check()               # verify reachable before sending
             done, failed = [], []
             for s in srcs:
                 try:
@@ -854,9 +909,10 @@ class VaultApp(ctk.CTk):
 
         self.dash_status.configure(text="กำลังถอดรหัส… / decrypting…")
         pw, encs = self.password, list(encs)
-        drive = self._get_drive()        # used only if a file is an online pointer
 
         def work():
+            # built lazily; only needed if a file turns out to be an online pointer
+            drive = self._get_drive()
             done, failed = [], []
             for e in encs:
                 try:

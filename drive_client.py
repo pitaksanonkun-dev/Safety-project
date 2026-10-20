@@ -117,27 +117,46 @@ class DriveClientOAuth(_DriveBase):
     def __init__(self, client_secret_json: str, token_path: str,
                  folder_id: str = ""):
         self.folder_id = (folder_id or "").strip()
+        import json as _json
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from google_auth_oauthlib.flow import InstalledAppFlow
 
         creds = None
         if os.path.exists(token_path):
+            # Only reuse the cached token if it was actually GRANTED the scopes we
+            # now need (read the stored scopes directly — has_scopes() reflects the
+            # requested, not the granted, scopes). A narrower old grant (e.g. the
+            # previous drive.file) must be re-consented, never refreshed, or Google
+            # returns 'invalid_scope'.
+            stored = set()
             try:
-                creds = Credentials.from_authorized_user_file(token_path, SCOPES_OAUTH)
+                with open(token_path, encoding="utf-8") as f:
+                    stored = set(_json.load(f).get("scopes") or [])
+            except Exception:
+                stored = set()
+            if set(SCOPES_OAUTH).issubset(stored):
+                try:
+                    creds = Credentials.from_authorized_user_file(token_path, SCOPES_OAUTH)
+                except Exception:
+                    creds = None
+
+        if creds and not creds.valid and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
             except Exception:
                 creds = None
-        # a cached token granted for a narrower scope must be re-consented
-        if creds and not creds.has_scopes(SCOPES_OAUTH):
-            creds = None
+
         if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    client_secret_json, SCOPES_OAUTH)
-                # opens the browser once; Desktop-app clients allow loopback
-                creds = flow.run_local_server(port=0, prompt="consent")
+            try:
+                if os.path.exists(token_path):
+                    os.remove(token_path)      # drop any stale/narrow token
+            except Exception:
+                pass
+            flow = InstalledAppFlow.from_client_secrets_file(
+                client_secret_json, SCOPES_OAUTH)
+            creds = flow.run_local_server(port=0, prompt="consent")  # browser once
             with open(token_path, "w", encoding="utf-8") as f:
                 f.write(creds.to_json())
+
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)

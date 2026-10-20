@@ -103,13 +103,16 @@ def _wrap(text, font, size, max_w):
     return lines
 
 
-def _border_png_and_aspect():
-    """Return (png_bytes, aspect H/W) of the floral border, kept high-res."""
+def _border_bytes_and_aspect():
+    """Return (jpeg_bytes, aspect H/W) of the floral border. JPEG keeps the
+    embedded image small (the watercolour compresses well) so the card PDF stays
+    well under 1 MB; the verse text is vector and stays sharp regardless."""
     img = Image.open(TEMPLATE_PATH).convert("RGB")
     W, H = img.size
-    if W < 1200:                      # only upscale small templates
-        img = img.resize((1400, round(H * 1400 / W)), Image.LANCZOS)
-    buf = BytesIO(); img.save(buf, format="PNG")
+    target = 1600                     # enough for crisp on-screen / print
+    if W != target:
+        img = img.resize((target, round(H * target / W)), Image.LANCZOS)
+    buf = BytesIO(); img.save(buf, format="JPEG", quality=85)
     return buf.getvalue(), H / W
 
 
@@ -125,7 +128,7 @@ def render_card_doc(page_w: float = 520.0) -> tuple[fitz.Document, str]:
     """Return (1-page fitz PDF card, english_abbrev) for a random verse.
     The english abbrev (e.g. 'Jhn 3.16') is meant to be the output file name."""
     verse, ref, en_ref = pick_verse()
-    border_png, aspect = _border_png_and_aspect()
+    border_png, aspect = _border_bytes_and_aspect()
     page_h = page_w * aspect
 
     doc = fitz.open()

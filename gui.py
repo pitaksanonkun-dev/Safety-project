@@ -41,6 +41,11 @@ except Exception:  # drag & drop is optional
 from vault import VaultStore
 import file_crypto
 import pdf_disguise
+try:
+    import drive_client
+    _HAS_DRIVE_LIB = True
+except Exception:          # google libs not installed
+    _HAS_DRIVE_LIB = False
 
 # Anchor the store to the program folder (next to this file), so the vault is
 # always found regardless of the working directory a launcher starts us in.
@@ -106,6 +111,10 @@ class VaultApp(ctk.CTk):
         self.settings = self._load_settings()
         self.enc_out_dir = self.settings.get("enc_out_dir") or ""
         self.out_format = self.settings.get("out_format") or "PDF"   # "PDF" | "JPG"
+        self.net_mode = self.settings.get("net_mode") or "Offline"   # "Online" | "Offline"
+        self.drive_sa_json = self.settings.get("drive_sa_json") or ""
+        self.drive_folder_id = self.settings.get("drive_folder_id") or ""
+        self._drive_client = None            # cached DriveClient
 
         self.container = ctk.CTkFrame(self, fg_color="transparent")
         self.container.pack(fill="both", expand=True)
@@ -238,6 +247,11 @@ class VaultApp(ctk.CTk):
                             command=self._menu_set_outdir)
         setmenu.add_command(label="เปิดโฟลเดอร์ปลายทาง   (Open output folder)",
                             command=self._menu_show_outdir)
+        setmenu.add_separator()
+        setmenu.add_command(label="ตั้งค่า Google Drive API…   (Set up Drive)",
+                            command=self._menu_set_drive)
+        setmenu.add_command(label="ทดสอบการเชื่อมต่อ Google Drive   (Test connection)",
+                            command=self._menu_test_drive)
         menubar.add_cascade(label="ตั้งค่า / Settings", menu=setmenu)
 
         self.config(menu=menubar)
@@ -266,6 +280,12 @@ class VaultApp(ctk.CTk):
             fmt_row, values=["PDF", "JPG"], command=self._set_out_format)
         self.fmt_selector.set(self.out_format)
         self.fmt_selector.pack(side="left")
+
+        ctk.CTkLabel(fmt_row, text="   โหมด / Mode:").pack(side="left", padx=(16, 8))
+        self.net_selector = ctk.CTkSegmentedButton(
+            fmt_row, values=["Offline", "Online"], command=self._set_net_mode)
+        self.net_selector.set(self.net_mode)
+        self.net_selector.pack(side="left")
 
         # Primary action buttons: encrypt / decrypt files to/from a folder.
         actions = ctk.CTkFrame(self.container, fg_color="transparent")
@@ -600,6 +620,80 @@ class VaultApp(ctk.CTk):
         self.settings["out_format"] = value
         self._save_settings()
 
+    def _set_net_mode(self, value):
+        self.net_mode = value                # "Online" or "Offline"
+        self.settings["net_mode"] = value
+        self._save_settings()
+
+    # ---- Google Drive ------------------------------------------------
+    def _menu_set_drive(self):
+        if not _HAS_DRIVE_LIB:
+            messagebox.showerror(
+                "Google Drive",
+                "ยังไม่มีไลบรารี Google API\nติดตั้งด้วย: pip install google-api-python-client google-auth")
+            return
+        f = filedialog.askopenfilename(
+            title="เลือกไฟล์กุญแจ Service Account (.json) / Choose service-account JSON key",
+            filetypes=[("JSON key", "*.json"), ("All files", "*.*")])
+        if not f:
+            return
+        dlg = ctk.CTkInputDialog(
+            title="Google Drive folder",
+            text="วาง Folder ID ปลายทางบน Google Drive (เว้นว่างได้ถ้าใช้ root ของ Shared Drive):")
+        folder = (dlg.get_input() or "").strip()
+
+        self.drive_sa_json = f
+        self.drive_folder_id = folder
+        self.settings["drive_sa_json"] = f
+        self.settings["drive_folder_id"] = folder
+        self._save_settings()
+        self._drive_client = None            # force rebuild
+        # verify immediately so the user knows if the API is reachable
+        self._menu_test_drive()
+
+    def _get_drive(self):
+        """Build (and cache) a DriveClient from settings, or None if unconfigured."""
+        if not _HAS_DRIVE_LIB:
+            return None
+        if not self.drive_sa_json or not Path(self.drive_sa_json).is_file():
+            return None
+        if self._drive_client is None:
+            self._drive_client = drive_client.DriveClient(
+                self.drive_sa_json, self.drive_folder_id)
+        return self._drive_client
+
+    def _menu_test_drive(self):
+        if not _HAS_DRIVE_LIB:
+            messagebox.showerror("Google Drive",
+                                 "ยังไม่มีไลบรารี Google API (ดูเมนูตั้งค่า Google Drive)")
+            return
+        if not self.drive_sa_json or not Path(self.drive_sa_json).is_file():
+            messagebox.showwarning(
+                "Google Drive",
+                "ยังไม่ได้ผูก API\nไปที่ ตั้งค่า > ตั้งค่า Google Drive API… เพื่อเลือกไฟล์กุญแจก่อน")
+            return
+        self.dash_status.configure(text="กำลังทดสอบการเชื่อมต่อ Google Drive…")
+
+        def work():
+            drive = drive_client.DriveClient(self.drive_sa_json, self.drive_folder_id)
+            return drive.check()
+
+        def done(email, err):
+            if err is not None:
+                self.dash_status.configure(text="เชื่อมต่อ Google Drive ไม่สำเร็จ")
+                messagebox.showerror(
+                    "เชื่อมต่อ Google Drive ไม่ได้",
+                    "ส่งข้อมูลไป Google Drive ไม่ได้ กรุณาผูก API ใหม่\n"
+                    "(ตั้งค่า > ตั้งค่า Google Drive API…)\n\n"
+                    f"รายละเอียด: {err}")
+            else:
+                self._drive_client = None     # rebuild with fresh creds next use
+                self.dash_status.configure(text="✓ เชื่อมต่อ Google Drive สำเร็จ")
+                messagebox.showinfo("Google Drive",
+                                    f"เชื่อมต่อสำเร็จ ✔\nบัญชี: {email}")
+
+        self._run_bg(work, done)
+
     # ---- menu: output folder ------------------------------------------
     def _menu_set_outdir(self):
         d = filedialog.askdirectory(
@@ -674,25 +768,45 @@ class VaultApp(ctk.CTk):
         if not out_dir:
             return
 
-        self.dash_status.configure(text="กำลังเข้ารหัส… / encrypting…")
+        online = (self.net_mode == "Online")
+        drive = self._get_drive() if online else None
+        if online and drive is None:
+            messagebox.showwarning(
+                "Online mode",
+                "โหมด Online ต้องตั้งค่า Google Drive ก่อน\n"
+                "ไปที่ ตั้งค่า > ตั้งค่า Google Drive API… (หรือเลือกโหมด Offline)")
+            return
+
+        self.dash_status.configure(
+            text=("กำลังอัปโหลดขึ้น Google Drive…" if online else "กำลังเข้ารหัส…"))
         pw = self.password
         fmt = self.out_format
         encrypt = (pdf_disguise.encrypt_file_to_jpg if fmt == "JPG"
                    else pdf_disguise.encrypt_file_to_pdf)
 
         def work():
+            if online:
+                drive.check()        # verify reachable before sending anything
             done, failed = [], []
             for s in srcs:
                 try:
-                    done.append(encrypt(s, out_dir, pw))
+                    done.append(encrypt(s, out_dir, pw, online=online, drive=drive))
                 except Exception as exc:
                     failed.append(f"{Path(s).name}: {exc}")
             return done, failed
 
         def after(res, err):
             if err is not None:
-                self.dash_status.configure(text="เข้ารหัสล้มเหลว")
-                messagebox.showerror("Encrypt failed", str(err))
+                if online:
+                    self.dash_status.configure(text="ส่ง Google Drive ไม่ได้")
+                    messagebox.showerror(
+                        "เชื่อมต่อ Google Drive ไม่ได้",
+                        "ส่งข้อมูลไป Google Drive ไม่ได้ กรุณาผูก API ใหม่\n"
+                        "(ตั้งค่า > ตั้งค่า Google Drive API…) หรือสลับเป็นโหมด Offline\n\n"
+                        f"รายละเอียด: {err}")
+                else:
+                    self.dash_status.configure(text="เข้ารหัสล้มเหลว")
+                    messagebox.showerror("Encrypt failed", str(err))
                 return
             self._encrypt_done(res[0], res[1], out_dir)
 
@@ -701,10 +815,14 @@ class VaultApp(ctk.CTk):
     def _encrypt_done(self, done, failed, out_dir):
         self._clear_pending()     # dropped files have been handled
         fmt = self.out_format
+        online = (self.net_mode == "Online")
+        mode_txt = ("Online — ข้อมูลถูกอัปโหลดขึ้น Google Drive, ไฟล์ "
+                    f"{fmt} นี้มีเพียงลิงก์ที่ซ่อนไว้ (เล็ก)") if online else \
+                   f"Offline — ข้อมูลฝังอยู่ในไฟล์ {fmt} (ขนาดจริง)"
         self.dash_status.configure(
-            text=f"✓ เข้ารหัสแล้ว {len(done)} ไฟล์ เป็น {fmt} พราง (ต้นฉบับยังอยู่)")
-        msg = (f"เข้ารหัส {len(done)} ไฟล์ เป็นไฟล์ {fmt} (ดูเหมือนข้อพระคัมภีร์) "
-               f"บันทึกไว้ที่:\n{out_dir}\n\n"
+            text=f"✓ เข้ารหัสแล้ว {len(done)} ไฟล์ [{self.net_mode}]")
+        msg = (f"เข้ารหัส {len(done)} ไฟล์ เป็นไฟล์ {fmt} (ดูเหมือนข้อพระคัมภีร์)\n"
+               f"โหมด: {mode_txt}\n\nบันทึกไว้ที่:\n{out_dir}\n\n"
                f"ไฟล์ต้นฉบับไม่ถูกลบ ยังใช้งานได้ตามปกติ\n"
                f"นำไฟล์ {fmt} เหล่านี้กลับมากด 'ถอดรหัสไฟล์' เพื่อได้ไฟล์เดิมคืน")
         if failed:
@@ -736,6 +854,7 @@ class VaultApp(ctk.CTk):
 
         self.dash_status.configure(text="กำลังถอดรหัส… / decrypting…")
         pw, encs = self.password, list(encs)
+        drive = self._get_drive()        # used only if a file is an online pointer
 
         def work():
             done, failed = [], []
@@ -744,9 +863,9 @@ class VaultApp(ctk.CTk):
                     low = str(e).lower()
                     # detect by content/extension: disguise JPG, disguise PDF, else .enc
                     if low.endswith((".jpg", ".jpeg")) or pdf_disguise.is_disguise_jpg(e):
-                        done.append(pdf_disguise.decrypt_jpg_to_folder(e, out_dir, pw))
+                        done.append(pdf_disguise.decrypt_jpg_to_folder(e, out_dir, pw, drive=drive))
                     elif low.endswith(".pdf") or pdf_disguise.is_disguise_pdf(e):
-                        done.append(pdf_disguise.decrypt_pdf_to_folder(e, out_dir, pw))
+                        done.append(pdf_disguise.decrypt_pdf_to_folder(e, out_dir, pw, drive=drive))
                     else:
                         done.append(file_crypto.decrypt_file_to_folder(e, out_dir, pw))
                 except Exception as exc:

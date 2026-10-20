@@ -153,7 +153,7 @@ def _resolve_payload(payload: bytes, drive) -> tuple[bytes, str | None]:
 
 
 def _encrypt_file(src, out_dir, password, online, drive, kind: str,
-                  allowed_emails=None, public=False) -> Path:
+                  allowed_emails=None, public=False, setup=None) -> Path:
     """Shared encrypt path for kind in {'pdf','jpg'}.
     Offline: the disguise file holds the full data.
     Online: the FULL disguise PDF/JPG is uploaded to Drive; the LOCAL file is a
@@ -194,8 +194,10 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str,
                         drive.share_with_email(drive_id, email)
                     except Exception:
                         pass
-        pointer = bytes([MODE_ONLINE]) + json.dumps(
-            {"v": 1, "drive_id": drive_id, "kind": kind}).encode("utf-8")
+        ptr = {"v": 1, "drive_id": drive_id, "kind": kind}
+        if setup:                 # bundle OAuth client + allow-list for the recipient
+            ptr["setup"] = setup
+        pointer = bytes([MODE_ONLINE]) + json.dumps(ptr).encode("utf-8")
         # the local pointer also carries the pointer as a QR, so it still works
         # after a chat app recompresses the image and strips the trailer
         qr_data = qr_pointer.encode_pointer(drive_id, kind)
@@ -208,20 +210,55 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str,
 
 def encrypt_file_to_pdf(src: str | Path, out_dir: str | Path, password: str,
                         online: bool = False, drive=None, allowed_emails=None,
-                        public=False) -> Path:
+                        public=False, setup=None) -> Path:
     """Encrypt `src` to a disguise PDF. Online: upload a full PDF to Drive, either
-    public (anyone with the file can decrypt) or shared only with allowed_emails."""
+    public (anyone with the file can decrypt) or shared only with allowed_emails.
+    `setup` (OAuth client + allow-list) is bundled so a recipient self-configures."""
     return _encrypt_file(src, out_dir, password, online, drive, "pdf",
-                         allowed_emails, public)
+                         allowed_emails, public, setup)
 
 
 def encrypt_file_to_jpg(src: str | Path, out_dir: str | Path, password: str,
                         online: bool = False, drive=None, allowed_emails=None,
-                        public=False, zoom: float = 3.0) -> Path:
+                        public=False, setup=None, zoom: float = 3.0) -> Path:
     """Encrypt `src` to a disguise JPG. Online: upload a full JPG to Drive, either
-    public (anyone with the file can decrypt) or shared only with allowed_emails."""
+    public (anyone with the file can decrypt) or shared only with allowed_emails.
+    `setup` (OAuth client + allow-list) is bundled so a recipient self-configures."""
     return _encrypt_file(src, out_dir, password, online, drive, "jpg",
-                         allowed_emails, public)
+                         allowed_emails, public, setup)
+
+
+def _payload_from_file(path) -> bytes | None:
+    """Return the embedded pointer/payload bytes from a disguise file, or None."""
+    path = Path(path)
+    data = path.read_bytes()
+    if str(path).lower().endswith((".jpg", ".jpeg")):
+        if len(data) >= JPG_TRAILER_LEN and data[-JPG_TRAILER_LEN:-8] == JPG_MARKER:
+            n = int.from_bytes(data[-8:], "big")
+            return data[-(JPG_TRAILER_LEN + n):-JPG_TRAILER_LEN]
+        return None
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        try:
+            if PAYLOAD_NAME in doc.embfile_names():
+                return bytes(doc.embfile_get(PAYLOAD_NAME))
+        finally:
+            doc.close()
+    except Exception:
+        pass
+    return None
+
+
+def peek_setup(path) -> dict | None:
+    """Read the bundled {client_secret, allowed_emails, public} from an online
+    disguise file WITHOUT decrypting, so the recipient can self-configure."""
+    payload = _payload_from_file(path)
+    if not payload or payload[0] != MODE_ONLINE:
+        return None
+    try:
+        return json.loads(payload[1:].decode("utf-8")).get("setup")
+    except Exception:
+        return None
 
 
 def is_disguise_jpg(path: str | Path) -> bool:

@@ -14,6 +14,8 @@ recovery_share_*.json
 # Google Drive credentials / tokens — NEVER commit (these are secrets)
 drive_token.json
 client_secret*.json
+*client_secret*.json
+drive_client_secret.json
 *oauth*.json
 *service*account*.json
 *-sa-*.json

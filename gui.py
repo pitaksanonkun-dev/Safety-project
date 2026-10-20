@@ -795,6 +795,46 @@ class VaultApp(ctk.CTk):
             return False
         return True
 
+    def _build_setup(self):
+        """Bundle the OAuth client + allow-list so a recipient self-configures and
+        becomes a full sender/receiver. Returns None if not applicable."""
+        if self.drive_method != "oauth" or not self.drive_oauth_client:
+            return None
+        try:
+            with open(self.drive_oauth_client, encoding="utf-8") as f:
+                cs = json.load(f)
+        except Exception:
+            return None
+        return {"client_secret": cs,
+                "allowed_emails": list(self.allowed_emails),
+                "public": self.online_public}
+
+    def _install_setup(self, setup):
+        """Auto-apply a bundled setup from a received file: write the OAuth client
+        locally (if this machine has none) and inherit the allow-list / mode."""
+        try:
+            cs = setup.get("client_secret")
+            if cs and not self._drive_configured():
+                path = str(_APP_DIR / "drive_client_secret.json")
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(cs, f)
+                self.drive_method = "oauth"
+                self.drive_oauth_client = path
+                self.settings["drive_method"] = "oauth"
+                self.settings["drive_oauth_client"] = path
+                self._drive_client = None
+            em = setup.get("allowed_emails")
+            if em is not None:
+                merged = list(dict.fromkeys(list(self.allowed_emails) + list(em)))
+                self.allowed_emails = merged
+                self.settings["allowed_emails"] = merged
+            if "public" in setup:
+                self.online_public = bool(setup["public"])
+                self.settings["online_public"] = self.online_public
+            self._save_settings()
+        except Exception:
+            pass
+
     def _menu_set_drive_oauth(self):
         """Recommended: OAuth — uploads to the user's own Drive (has quota)."""
         if not self._drive_lib_ok():
@@ -991,6 +1031,7 @@ class VaultApp(ctk.CTk):
         fmt = self.out_format
         emails = list(self.allowed_emails)
         public = self.online_public
+        setup = self._build_setup() if online else None
         encrypt = (pdf_disguise.encrypt_file_to_jpg if fmt == "JPG"
                    else pdf_disguise.encrypt_file_to_pdf)
 
@@ -1003,7 +1044,8 @@ class VaultApp(ctk.CTk):
             for s in srcs:
                 try:
                     done.append(encrypt(s, out_dir, pw, online=online, drive=drive,
-                                        allowed_emails=emails, public=public))
+                                        allowed_emails=emails, public=public,
+                                        setup=setup))
                 except Exception as exc:
                     failed.append(f"{Path(s).name}: {exc}")
             return done, failed
@@ -1071,6 +1113,13 @@ class VaultApp(ctk.CTk):
         pw, encs = self.password, list(encs)
 
         def work():
+            # auto-configure from any bundled setup so this machine can receive
+            # (and later send) without manual Google Drive setup
+            for e in encs:
+                s = pdf_disguise.peek_setup(e)
+                if s:
+                    self._install_setup(s)
+                    break
             # built lazily; only needed if a file turns out to be an online pointer
             drive = self._get_drive()
             done, failed = [], []

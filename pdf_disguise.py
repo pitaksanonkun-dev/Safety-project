@@ -41,11 +41,12 @@ MODE_OFFLINE = 0
 MODE_ONLINE = 1
 
 
-def _pdf_bytes_from_payload(payload: bytes, qr_data: str | None = None) -> tuple[bytes, str]:
+def _pdf_bytes_from_payload(payload: bytes, qr_data: str | None = None,
+                            verse=None) -> tuple[bytes, str]:
     """Render a verse-card PDF with `payload` embedded; return (bytes, verse_name).
     If qr_data is given, also stamp a QR (survives if the PDF is turned into an
-    image, e.g. shared through a chat app)."""
-    doc, en_ref = verse_card.render_card_doc()
+    image, e.g. shared through a chat app). Pass `verse` to pin a specific verse."""
+    doc, en_ref = verse_card.render_card_doc(verse=verse)
     try:
         if qr_data:
             page = doc[0]
@@ -66,12 +67,12 @@ def _qr_png(data: str) -> bytes:
 
 
 def _jpg_bytes_from_payload(payload: bytes, qr_data: str | None = None,
-                            zoom: float = 3.0) -> tuple[bytes, str]:
+                            verse=None, zoom: float = 3.0) -> tuple[bytes, str]:
     """Render a verse-card JPG with `payload` appended; return (bytes, verse_name).
     If qr_data is given, stamp a QR onto the image so the pointer survives chat-app
-    recompression (which strips the appended trailer)."""
+    recompression (which strips the appended trailer). Pass `verse` to pin one."""
     from PIL import Image
-    doc, en_ref = verse_card.render_card_doc()
+    doc, en_ref = verse_card.render_card_doc(verse=verse)
     try:
         pix = doc[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
@@ -153,8 +154,10 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str) -> Path:
     else:
         if drive is None:
             raise RuntimeError("ยังไม่ได้ตั้งค่า Google Drive — เข้ารหัสแบบ Online ไม่ได้")
+        # pin ONE verse so the Drive file and the local pointer show the same card
+        chosen = verse_card.pick_verse()
         # full disguise file (same chosen format) goes to Drive — openable, data inside
-        full_bytes, en_full = make_bytes(offline_payload)
+        full_bytes, en_full = make_bytes(offline_payload, verse=chosen)
         drive_id = drive.upload_bytes(full_bytes, en_full + suffix, mime=mime)
         # share 'anyone with the link' so another person/Gmail can also decrypt
         try:
@@ -166,7 +169,7 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str) -> Path:
         # the local pointer also carries the pointer as a QR, so it still works
         # after a chat app recompresses the image and strips the trailer
         qr_data = qr_pointer.encode_pointer(drive_id, kind)
-        out_bytes, en_ref = make_bytes(pointer, qr_data=qr_data)
+        out_bytes, en_ref = make_bytes(pointer, qr_data=qr_data, verse=chosen)
 
     out_path = file_crypto._unique_path(out_dir / (en_ref + suffix))
     out_path.write_bytes(out_bytes)

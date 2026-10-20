@@ -124,10 +124,13 @@ def _center(page, text, baseline_y, fontfile, fontname, size, color, page_w):
                      color=color)
 
 
-def render_card_doc(page_w: float = 520.0) -> tuple[fitz.Document, str]:
-    """Return (1-page fitz PDF card, english_abbrev) for a random verse.
-    The english abbrev (e.g. 'Jhn 3.16') is meant to be the output file name."""
-    verse, ref, en_ref = pick_verse()
+def render_card_doc(page_w: float = 520.0,
+                    verse: tuple[str, str, str] | None = None
+                    ) -> tuple[fitz.Document, str]:
+    """Return (1-page fitz PDF card, english_abbrev). Pass `verse` (a VERSES
+    tuple) to force a specific verse — used so the Online pointer shows the SAME
+    verse as the file uploaded to Drive. Otherwise a random verse is chosen."""
+    verse_txt, ref, en_ref = verse if verse is not None else pick_verse()
     border_png, aspect = _border_bytes_and_aspect()
     page_h = page_w * aspect
 
@@ -139,40 +142,42 @@ def render_card_doc(page_w: float = 520.0) -> tuple[fitz.Document, str]:
     page.insert_image(page.rect, stream=border_png)
 
     # writing column kept inside the gold frame, clear of the florals
-    mx = page_w * 0.155
-    top_m = page_h * 0.150
-    bot_m = page_h * 0.150
+    mx = page_w * 0.125
+    top_m = page_h * 0.135
+    bot_m = page_h * 0.135
     my = bot_m
     inner_w = page_w - 2 * mx
 
-    # heading
+    # heading (larger)
     y = top_m
     _center(page, "ข้อพระคัมภีร์ประจำวัน", y, _HEAD_FONT, "HV",
-            page_w * 0.044, (0.24, 0.28, 0.38), page_w)
-    y += page_w * 0.044 * 1.2
+            page_w * 0.052, (0.24, 0.28, 0.38), page_w)
+    y += page_w * 0.052 * 1.25
     _center(page, "พระธรรมของพระเจ้า", y, _HEAD_FONT, "HV",
-            page_w * 0.032, (0.47, 0.51, 0.59), page_w)
+            page_w * 0.038, (0.47, 0.51, 0.59), page_w)
 
     # verse — auto-fit font size so the whole thing fits uncut
     vfile = _VERSE_FONT
     vfont = fitz.Font(fontfile=vfile)
-    body = "\u201c" + verse + "\u201d"
-    top = y + page_h * 0.045
-    bot = page_h - my - page_h * 0.085           # leave room for the reference
-    for size in range(int(page_w * 0.052), 12, -1):
+    body = "\u201c" + verse_txt + "\u201d"
+    top = y + page_h * 0.05
+    bot = page_h - my - page_h * 0.075           # leave room for the reference
+    size = int(page_w * 0.072)
+    while size >= 16:
         lines = _wrap(body, vfont, size, inner_w)
-        line_h = size * 1.95
+        line_h = size * 1.9
         if line_h * len(lines) <= (bot - top):
             break
+        size -= 1
     block_h = line_h * len(lines)
     vy = top + max(0.0, ((bot - top) - block_h) / 2) + size  # first baseline
     for ln in lines:
         _center(page, ln, vy, vfile, "AG", size, (0.17, 0.19, 0.24), page_w)
         vy += line_h
 
-    # reference
-    _center(page, f"\u2014  {ref}", page_h - my - page_h * 0.035,
-            _REF_FONT, "HV", page_w * 0.030, (0.43, 0.47, 0.55), page_w)
+    # reference (larger), nudged up to clear the bottom florals
+    _center(page, f"\u2014  {ref}", page_h - my - page_h * 0.055,
+            _REF_FONT, "HV", page_w * 0.038, (0.43, 0.47, 0.55), page_w)
 
     return doc, en_ref
 

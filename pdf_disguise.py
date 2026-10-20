@@ -15,6 +15,7 @@ Dependencies: PyMuPDF (fitz), Pillow (via verse_card). Reuses file_crypto.
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ import fitz  # PyMuPDF
 
 import file_crypto
 import verse_card
+import qr_pointer
 
 PAYLOAD_NAME = "docorg_payload"
 ATTACH_FILENAME = "resource.dat"
@@ -39,27 +41,50 @@ MODE_OFFLINE = 0
 MODE_ONLINE = 1
 
 
-def _pdf_bytes_from_payload(payload: bytes) -> tuple[bytes, str]:
-    """Render a verse-card PDF with `payload` embedded; return (bytes, verse_name)."""
+def _pdf_bytes_from_payload(payload: bytes, qr_data: str | None = None) -> tuple[bytes, str]:
+    """Render a verse-card PDF with `payload` embedded; return (bytes, verse_name).
+    If qr_data is given, also stamp a QR (survives if the PDF is turned into an
+    image, e.g. shared through a chat app)."""
     doc, en_ref = verse_card.render_card_doc()
     try:
+        if qr_data:
+            page = doc[0]
+            png = _qr_png(qr_data)
+            w = page.rect.width
+            s = w * 0.17
+            page.insert_image(fitz.Rect(w - s - 12, 12, w - 12, 12 + s), stream=png)
         doc.embfile_add(PAYLOAD_NAME, payload, filename=ATTACH_FILENAME, desc="resource")
         return doc.tobytes(deflate=True), en_ref
     finally:
         doc.close()
 
 
-def _jpg_bytes_from_payload(payload: bytes, zoom: float = 3.0) -> tuple[bytes, str]:
-    """Render a verse-card JPG with `payload` appended; return (bytes, verse_name)."""
+def _qr_png(data: str) -> bytes:
+    buf = io.BytesIO()
+    qr_pointer.make_qr_image(data, px=360).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _jpg_bytes_from_payload(payload: bytes, qr_data: str | None = None,
+                            zoom: float = 3.0) -> tuple[bytes, str]:
+    """Render a verse-card JPG with `payload` appended; return (bytes, verse_name).
+    If qr_data is given, stamp a QR onto the image so the pointer survives chat-app
+    recompression (which strips the appended trailer)."""
+    from PIL import Image
     doc, en_ref = verse_card.render_card_doc()
     try:
         pix = doc[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        try:
-            jpg = pix.tobytes("jpg", jpg_quality=92)
-        except TypeError:                       # older PyMuPDF signature
-            jpg = pix.tobytes("jpeg")
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
     finally:
         doc.close()
+
+    if qr_data:
+        q = round(pix.width * 0.17)
+        qr = qr_pointer.make_qr_image(qr_data, px=q)
+        img.paste(qr, (pix.width - q - 12, 12))
+
+    buf = io.BytesIO(); img.save(buf, "JPEG", quality=92)
+    jpg = buf.getvalue()
     return jpg + payload + JPG_MARKER + len(payload).to_bytes(8, "big"), en_ref
 
 
@@ -80,24 +105,30 @@ def _extract_payload_from_bytes(data: bytes, kind: str) -> bytes:
         doc.close()
 
 
-def _resolve_payload(payload: bytes, drive) -> bytes:
-    """Return the encrypted blob from a payload, following an online pointer
-    (download the full PDF/JPG from Drive and re-extract) if needed."""
+def _resolve_payload(payload: bytes, drive) -> tuple[bytes, str | None]:
+    """Return (encrypted_blob, online_drive_id_or_None). An online pointer is
+    fetched from Drive via a PUBLIC download (no credentials needed), so anyone
+    with the file — even a different Gmail — can decrypt it."""
     payload = bytes(payload)
     # Backward compatibility: old files embedded the raw blob with no mode byte.
     if payload[:len(file_crypto.MAGIC)] == file_crypto.MAGIC:
-        return payload
+        return payload, None
     mode, body = payload[0], payload[1:]
     if mode == MODE_OFFLINE:
-        return body
+        return body, None
     if mode == MODE_ONLINE:
         info = json.loads(body.decode("utf-8"))
-        if drive is None:
+        drive_id = info["drive_id"]
+        try:
+            from drive_client import public_download_bytes
+            full = public_download_bytes(drive_id)             # no auth needed
+        except Exception as exc:
             raise RuntimeError(
-                "ไฟล์นี้เป็นแบบ Online — ต้องตั้งค่า Google Drive ก่อนจึงจะถอดรหัสได้")
-        full = drive.download_bytes(info["drive_id"])          # a real PDF/JPG
+                "ดาวน์โหลดไฟล์จาก Google Drive ไม่ได้ (ไฟล์อาจถูกลบไปแล้ว "
+                f"หรือไม่ได้แชร์แบบสาธารณะ)\nรายละเอียด: {exc}")
         inner = _extract_payload_from_bytes(full, info.get("kind", "pdf"))
-        return _resolve_payload(inner, drive)                  # -> offline -> blob
+        blob, _ = _resolve_payload(inner, drive)               # inner is offline
+        return blob, drive_id
     raise ValueError("payload mode ไม่รู้จัก (ไฟล์อาจเสียหาย)")
 
 
@@ -125,9 +156,17 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str) -> Path:
         # full disguise file (same chosen format) goes to Drive — openable, data inside
         full_bytes, en_full = make_bytes(offline_payload)
         drive_id = drive.upload_bytes(full_bytes, en_full + suffix, mime=mime)
+        # share 'anyone with the link' so another person/Gmail can also decrypt
+        try:
+            drive.make_public(drive_id)
+        except Exception:
+            pass
         pointer = bytes([MODE_ONLINE]) + json.dumps(
             {"v": 1, "drive_id": drive_id, "kind": kind}).encode("utf-8")
-        out_bytes, en_ref = make_bytes(pointer)                # small local pointer
+        # the local pointer also carries the pointer as a QR, so it still works
+        # after a chat app recompresses the image and strips the trailer
+        qr_data = qr_pointer.encode_pointer(drive_id, kind)
+        out_bytes, en_ref = make_bytes(pointer, qr_data=qr_data)
 
     out_path = file_crypto._unique_path(out_dir / (en_ref + suffix))
     out_path.write_bytes(out_bytes)
@@ -159,22 +198,43 @@ def is_disguise_jpg(path: str | Path) -> bool:
         return False
 
 
+def _online_pointer_payload(drive_id: str, kind: str) -> bytes:
+    return bytes([MODE_ONLINE]) + json.dumps(
+        {"v": 1, "drive_id": drive_id, "kind": kind}).encode("utf-8")
+
+
+def _maybe_delete(drive_id, drive) -> None:
+    """Delete the online Drive file after a successful decrypt (owner only;
+    a recipient with a different Gmail simply can't, which is fine)."""
+    if drive_id and drive is not None:
+        try:
+            drive.delete_file(drive_id)
+        except Exception:
+            pass
+
+
 def decrypt_jpg_to_folder(jpg_path: str | Path, out_dir: str | Path,
                           password: str, drive=None) -> Path:
-    """Extract the payload from the disguise JPG and restore the file
-    (downloading from Drive first if it is an online pointer)."""
+    """Restore the original file from a disguise JPG. Reads the appended pointer,
+    or — if a chat app stripped it — the QR stamped on the image. Online files
+    are downloaded from Drive and then deleted there."""
     data = Path(jpg_path).read_bytes()
-    if len(data) < JPG_TRAILER_LEN or data[-JPG_TRAILER_LEN:-8] != JPG_MARKER:
-        raise ValueError("ไฟล์ JPG นี้ไม่มีข้อมูลที่ซ่อนไว้ (ไม่ใช่ไฟล์ของระบบ)")
-    n = int.from_bytes(data[-8:], "big")
-    payload = data[-(JPG_TRAILER_LEN + n):-JPG_TRAILER_LEN]
+    if len(data) >= JPG_TRAILER_LEN and data[-JPG_TRAILER_LEN:-8] == JPG_MARKER:
+        n = int.from_bytes(data[-8:], "big")
+        payload = data[-(JPG_TRAILER_LEN + n):-JPG_TRAILER_LEN]
+    else:
+        ptr = qr_pointer.read_pointer_from_image_bytes(data)   # survives recompression
+        if not ptr:
+            raise ValueError("ไฟล์ JPG นี้ไม่มีข้อมูลที่ซ่อนไว้ หรือถูกแก้ไขจนอ่านไม่ได้")
+        payload = _online_pointer_payload(*ptr)
 
-    blob = _resolve_payload(payload, drive)
+    blob, used_drive_id = _resolve_payload(payload, drive)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     original_name, content = file_crypto.read_blob(blob, password)
     out_path = file_crypto._unique_path(out_dir / original_name)
     out_path.write_bytes(content)
+    _maybe_delete(used_drive_id, drive)
     return out_path
 
 
@@ -196,18 +256,25 @@ def decrypt_pdf_to_folder(pdf_path: str | Path, out_dir: str | Path,
     (downloading from Drive first if it is an online pointer)."""
     doc = fitz.open(str(pdf_path))
     try:
-        if PAYLOAD_NAME not in doc.embfile_names():
-            raise ValueError("ไฟล์ PDF นี้ไม่มีข้อมูลที่ซ่อนไว้ (ไม่ใช่ไฟล์ของระบบ)")
-        payload = doc.embfile_get(PAYLOAD_NAME)
+        if PAYLOAD_NAME in doc.embfile_names():
+            payload = bytes(doc.embfile_get(PAYLOAD_NAME))
+        else:
+            # embedded file stripped (e.g. PDF flattened to an image) -> read QR
+            png = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes("png")
+            ptr = qr_pointer.read_pointer_from_image_bytes(png)
+            if not ptr:
+                raise ValueError("ไฟล์ PDF นี้ไม่มีข้อมูลที่ซ่อนไว้ (ไม่ใช่ไฟล์ของระบบ)")
+            payload = _online_pointer_payload(*ptr)
     finally:
         doc.close()
 
-    blob = _resolve_payload(payload, drive)
+    blob, used_drive_id = _resolve_payload(payload, drive)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     original_name, data = file_crypto.read_blob(blob, password)
     out_path = file_crypto._unique_path(out_dir / original_name)
     out_path.write_bytes(data)
+    _maybe_delete(used_drive_id, drive)
     return out_path
 
 

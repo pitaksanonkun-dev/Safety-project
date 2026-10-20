@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import io
 import os
+import re
 
+import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseDownload
@@ -54,9 +56,42 @@ class _DriveBase:
             _status, done = downloader.next_chunk()
         return buf.getvalue()
 
+    def make_public(self, file_id: str) -> None:
+        """Let anyone with the link read the file (so other accounts can fetch)."""
+        self.service.permissions().create(
+            fileId=file_id, body={"type": "anyone", "role": "reader"},
+            supportsAllDrives=True).execute()
+
+    def delete_file(self, file_id: str) -> None:
+        """Delete a file (only the owner can; callers ignore permission errors)."""
+        self.service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+
     def check(self) -> str:
         about = self.service.about().get(fields="user(emailAddress)").execute()
         return about.get("user", {}).get("emailAddress", "(unknown)")
+
+
+def public_download_bytes(file_id: str) -> bytes:
+    """Download a file that is shared 'anyone with the link' — NO credentials
+    needed, so a person with a different Gmail (or none) can fetch it.
+    Handles Google's large-file 'confirm' interstitial."""
+    sess = requests.Session()
+    base = "https://drive.usercontent.google.com/download"
+    r = sess.get(base, params={"id": file_id, "export": "download"}, stream=True)
+    ctype = r.headers.get("Content-Type", "")
+    if "text/html" not in ctype:
+        return r.content
+    # interstitial page -> pull the confirm token + uuid from the form and retry
+    html = r.content
+    confirm = re.search(rb'name="confirm"\s+value="([^"]+)"', html)
+    uuid = re.search(rb'name="uuid"\s+value="([^"]+)"', html)
+    params = {"id": file_id, "export": "download",
+              "confirm": confirm.group(1).decode() if confirm else "t"}
+    if uuid:
+        params["uuid"] = uuid.group(1).decode()
+    r = sess.get(base, params=params, stream=True)
+    r.raise_for_status()
+    return r.content
 
 
 class DriveClient(_DriveBase):

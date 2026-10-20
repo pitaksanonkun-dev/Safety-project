@@ -118,6 +118,7 @@ class VaultApp(ctk.CTk):
         self.drive_folder_id = self.settings.get("drive_folder_id") or ""
         self.drive_token_path = str(_APP_DIR / "drive_token.json")
         self.allowed_emails = self.settings.get("allowed_emails") or []   # Online allow-list
+        self.online_public = self.settings.get("online_public", True)     # anyone-with-file can decrypt
         self._drive_client = None            # cached Drive client
 
         # Make Ctrl+A/C/V/X work in every entry regardless of keyboard layout
@@ -701,9 +702,26 @@ class VaultApp(ctk.CTk):
                      font=ctk.CTkFont(size=14, weight="bold"),
                      text_color="#f2f4f7").pack(pady=(14, 2))
         ctk.CTkLabel(win, text="เว้นว่าง = เฉพาะบัญชีของคุณเองเท่านั้น",
-                     text_color="#aab2bd").pack(pady=(0, 8))
+                     text_color="#aab2bd").pack(pady=(0, 6))
 
-        listframe = ctk.CTkScrollableFrame(win, height=210, fg_color="#1e1e1e")
+        # Public toggle — easiest for sending to another machine (no setup there)
+        pub_var = ctk.StringVar(value="on" if self.online_public else "off")
+
+        def toggle_public():
+            self.online_public = (pub_var.get() == "on")
+            self.settings["online_public"] = self.online_public
+            self._save_settings()
+            listframe.configure(fg_color="#171717" if self.online_public else "#1e1e1e")
+
+        ctk.CTkSwitch(
+            win, text="เปิดสาธารณะ: ใครมีไฟล์ + รหัสผ่าน ก็ถอดได้ (ไม่ต้องตั้งค่าเครื่องปลายทาง)",
+            variable=pub_var, onvalue="on", offvalue="off",
+            command=toggle_public, text_color="#e6b800").pack(pady=(0, 8), padx=14)
+        ctk.CTkLabel(win, text="ปิดสวิตช์ = จำกัดเฉพาะอีเมลด้านล่าง (ผู้รับต้องตั้งค่า Google Drive เอง)",
+                     text_color="#8a9099", font=ctk.CTkFont(size=11)).pack(pady=(0, 6))
+
+        listframe = ctk.CTkScrollableFrame(
+            win, height=180, fg_color="#171717" if self.online_public else "#1e1e1e")
         listframe.pack(fill="both", expand=True, padx=14, pady=4)
 
         def save():
@@ -972,6 +990,7 @@ class VaultApp(ctk.CTk):
         pw = self.password
         fmt = self.out_format
         emails = list(self.allowed_emails)
+        public = self.online_public
         encrypt = (pdf_disguise.encrypt_file_to_jpg if fmt == "JPG"
                    else pdf_disguise.encrypt_file_to_pdf)
 
@@ -984,7 +1003,7 @@ class VaultApp(ctk.CTk):
             for s in srcs:
                 try:
                     done.append(encrypt(s, out_dir, pw, online=online, drive=drive,
-                                        allowed_emails=emails))
+                                        allowed_emails=emails, public=public))
                 except Exception as exc:
                     failed.append(f"{Path(s).name}: {exc}")
             return done, failed

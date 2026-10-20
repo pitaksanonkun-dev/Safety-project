@@ -122,24 +122,38 @@ def _resolve_payload(payload: bytes, drive) -> tuple[bytes, str | None]:
     if mode == MODE_ONLINE:
         info = json.loads(body.decode("utf-8"))
         drive_id = info["drive_id"]
-        if drive is None:
-            raise RuntimeError(
-                "ไฟล์นี้เป็นแบบ Online — ต้องตั้งค่า Google Drive ด้วย Gmail ที่ได้รับ"
-                "อนุญาตก่อน จึงจะถอดรหัสได้")
+        kind = info.get("kind", "pdf")
+        full = None
+        # 1) try a PUBLIC download first — works with ZERO setup on this machine
+        #    if the file was shared 'anyone with the link'.
         try:
-            full = drive.download_bytes(drive_id)              # authenticated
-        except Exception as exc:
-            raise RuntimeError(
-                "เข้าถึงไฟล์บน Google Drive ไม่ได้ — บัญชี Gmail นี้อาจไม่ได้รับอนุญาต "
-                f"หรือไฟล์ถูกลบไปแล้ว\nรายละเอียด: {exc}")
-        inner = _extract_payload_from_bytes(full, info.get("kind", "pdf"))
+            from drive_client import public_download_bytes
+            cand = public_download_bytes(drive_id)
+            _extract_payload_from_bytes(cand, kind)            # validate it's ours
+            full = cand
+        except Exception:
+            full = None
+        # 2) otherwise it is restricted -> need an authorised Google account here
+        if full is None:
+            if drive is None:
+                raise RuntimeError(
+                    "ไฟล์นี้จำกัดเฉพาะอีเมลที่อนุญาต — ต้องตั้งค่า Google Drive ด้วย "
+                    "Gmail ที่ได้รับอนุญาตบนเครื่องนี้ก่อน จึงจะถอดรหัสได้\n"
+                    "(หรือให้ผู้ส่งเข้ารหัสแบบ 'เปิดสาธารณะ')")
+            try:
+                full = drive.download_bytes(drive_id)
+            except Exception as exc:
+                raise RuntimeError(
+                    "เข้าถึงไฟล์บน Google Drive ไม่ได้ — บัญชี Gmail นี้อาจไม่ได้รับ"
+                    f"อนุญาต หรือไฟล์ถูกลบไปแล้ว\nรายละเอียด: {exc}")
+        inner = _extract_payload_from_bytes(full, kind)
         blob, _ = _resolve_payload(inner, drive)               # inner is offline
         return blob, drive_id
     raise ValueError("payload mode ไม่รู้จัก (ไฟล์อาจเสียหาย)")
 
 
 def _encrypt_file(src, out_dir, password, online, drive, kind: str,
-                  allowed_emails=None) -> Path:
+                  allowed_emails=None, public=False) -> Path:
     """Shared encrypt path for kind in {'pdf','jpg'}.
     Offline: the disguise file holds the full data.
     Online: the FULL disguise PDF/JPG is uploaded to Drive; the LOCAL file is a
@@ -165,14 +179,21 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str,
         # full disguise file (same chosen format) goes to Drive — openable, data inside
         full_bytes, en_full = make_bytes(offline_payload, verse=chosen)
         drive_id = drive.upload_bytes(full_bytes, en_full + suffix, mime=mime)
-        # grant read access ONLY to the allowed emails (keep it private otherwise)
-        for email in (allowed_emails or []):
-            email = email.strip()
-            if email:
-                try:
-                    drive.share_with_email(drive_id, email)
-                except Exception:
-                    pass
+        if public:
+            # anyone with the file can decrypt it — zero setup needed to receive
+            try:
+                drive.make_public(drive_id)
+            except Exception:
+                pass
+        else:
+            # grant read access ONLY to the allowed emails (private otherwise)
+            for email in (allowed_emails or []):
+                email = email.strip()
+                if email:
+                    try:
+                        drive.share_with_email(drive_id, email)
+                    except Exception:
+                        pass
         pointer = bytes([MODE_ONLINE]) + json.dumps(
             {"v": 1, "drive_id": drive_id, "kind": kind}).encode("utf-8")
         # the local pointer also carries the pointer as a QR, so it still works
@@ -186,18 +207,21 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str,
 
 
 def encrypt_file_to_pdf(src: str | Path, out_dir: str | Path, password: str,
-                        online: bool = False, drive=None, allowed_emails=None) -> Path:
-    """Encrypt `src` to a disguise PDF. Online: upload a full PDF to Drive (shared
-    only with allowed_emails) and keep a small pointer PDF locally."""
-    return _encrypt_file(src, out_dir, password, online, drive, "pdf", allowed_emails)
+                        online: bool = False, drive=None, allowed_emails=None,
+                        public=False) -> Path:
+    """Encrypt `src` to a disguise PDF. Online: upload a full PDF to Drive, either
+    public (anyone with the file can decrypt) or shared only with allowed_emails."""
+    return _encrypt_file(src, out_dir, password, online, drive, "pdf",
+                         allowed_emails, public)
 
 
 def encrypt_file_to_jpg(src: str | Path, out_dir: str | Path, password: str,
                         online: bool = False, drive=None, allowed_emails=None,
-                        zoom: float = 3.0) -> Path:
-    """Encrypt `src` to a disguise JPG. Online: upload a full JPG to Drive (shared
-    only with allowed_emails) and keep a small pointer JPG locally."""
-    return _encrypt_file(src, out_dir, password, online, drive, "jpg", allowed_emails)
+                        public=False, zoom: float = 3.0) -> Path:
+    """Encrypt `src` to a disguise JPG. Online: upload a full JPG to Drive, either
+    public (anyone with the file can decrypt) or shared only with allowed_emails."""
+    return _encrypt_file(src, out_dir, password, online, drive, "jpg",
+                         allowed_emails, public)
 
 
 def is_disguise_jpg(path: str | Path) -> bool:

@@ -1,0 +1,7 @@
+cryptography>=42
+argon2-cffi>=23
+customtkinter>=5.2
+tkinterdnd2>=0.4
+pymupdf>=1.24
+pillow>=10
+pythainlp>=5.0

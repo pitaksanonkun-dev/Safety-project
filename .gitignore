@@ -1,0 +1,34 @@
+# ──────────────────────────────────────────────────────────────
+#  NEVER commit the user's private vault data or local settings
+# ──────────────────────────────────────────────────────────────
+vault_store/
+vault_store_OLD_backup_*/
+app_settings.json
+error.log
+
+# Recovery key files, if ever saved inside the project
+recovery_key_*.json
+recovery_share_*.json
+*.seed
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Test / scratch artifacts
+_t/
+sbx_store/
+_card_preview.png
+_disguise_page.png
+_sarabun_test.png
+_thaitest.png
+_template_src.png
+_proto.pdf
+_mantext.txt
+_sample_card.png
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

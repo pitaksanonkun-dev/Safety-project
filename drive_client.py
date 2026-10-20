@@ -26,9 +26,11 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseDownload
 
-# Minimal scope: the app only touches files it creates.
+# Full Drive scope: the owner uploads/shares/deletes, and an allowed recipient
+# must be able to read a file that was SHARED with them (drive.file is not
+# enough for that), so both roles use the full scope.
 SCOPES_SA = ["https://www.googleapis.com/auth/drive"]
-SCOPES_OAUTH = ["https://www.googleapis.com/auth/drive.file"]
+SCOPES_OAUTH = ["https://www.googleapis.com/auth/drive"]
 
 
 class _DriveBase:
@@ -61,6 +63,13 @@ class _DriveBase:
         self.service.permissions().create(
             fileId=file_id, body={"type": "anyone", "role": "reader"},
             supportsAllDrives=True).execute()
+
+    def share_with_email(self, file_id: str, email: str) -> None:
+        """Grant read access to ONE specific Google account (allow-list)."""
+        self.service.permissions().create(
+            fileId=file_id,
+            body={"type": "user", "role": "reader", "emailAddress": email},
+            sendNotificationEmail=False, supportsAllDrives=True).execute()
 
     def delete_file(self, file_id: str) -> None:
         """Delete a file (only the owner can; callers ignore permission errors)."""
@@ -118,6 +127,9 @@ class DriveClientOAuth(_DriveBase):
                 creds = Credentials.from_authorized_user_file(token_path, SCOPES_OAUTH)
             except Exception:
                 creds = None
+        # a cached token granted for a narrower scope must be re-consented
+        if creds and not creds.has_scopes(SCOPES_OAUTH):
+            creds = None
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())

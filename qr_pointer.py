@@ -37,14 +37,18 @@ def decode_pointer(text: str):
     return drive_id, kind
 
 
-def make_qr_image(data: str, px: int = 300) -> Image.Image:
-    """High-error-correction QR as a white-padded PIL image, sized ~px."""
+def make_qr_image(data: str, px: int = 300,
+                  fill=(35, 32, 28), back=(245, 243, 236),
+                  border: int = 2) -> Image.Image:
+    """High-error-correction QR sized ~px. Defaults to a dark-grey code on a
+    cream background (the card colour) with a small quiet zone, so it blends in
+    and shows no stark white box — yet still scans after recompression."""
     qr = qrcode.QRCode(
         error_correction=qrcode.constants.ERROR_CORRECT_H,  # ~30% recoverable
-        box_size=10, border=4)
+        box_size=10, border=border)
     qr.add_data(data)
     qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    img = qr.make_image(fill_color=fill, back_color=back).convert("RGB")
     return img.resize((px, px), Image.NEAREST)
 
 

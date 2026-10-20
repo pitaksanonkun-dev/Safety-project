@@ -117,6 +117,7 @@ class VaultApp(ctk.CTk):
         self.drive_oauth_client = self.settings.get("drive_oauth_client") or ""
         self.drive_folder_id = self.settings.get("drive_folder_id") or ""
         self.drive_token_path = str(_APP_DIR / "drive_token.json")
+        self.allowed_emails = self.settings.get("allowed_emails") or []   # Online allow-list
         self._drive_client = None            # cached Drive client
 
         self.container = ctk.CTkFrame(self, fg_color="transparent")
@@ -169,6 +170,40 @@ class VaultApp(ctk.CTk):
                 self.after(poll_ms, poll)     # scheduled from the main thread
 
         self.after(poll_ms, poll)
+
+    def _show_success(self, title: str, message: str):
+        """A success dialog with a green check and green frame."""
+        win = ctk.CTkToplevel(self)
+        win.title(title)
+        win.resizable(False, False)
+        win.configure(fg_color="#e8f6ec")
+
+        frame = ctk.CTkFrame(win, fg_color="#ffffff", border_color="#2e9e4f",
+                             border_width=3, corner_radius=14)
+        frame.pack(fill="both", expand=True, padx=14, pady=14)
+        ctk.CTkLabel(frame, text="✓",
+                     font=ctk.CTkFont(size=58, weight="bold"),
+                     text_color="#2e9e4f").pack(pady=(18, 0))
+        ctk.CTkLabel(frame, text=title,
+                     font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color="#1f6b3b").pack(pady=(2, 4))
+        ctk.CTkLabel(frame, text=message, text_color="#2b3a2e",
+                     wraplength=380, justify="center").pack(padx=16, pady=(0, 12))
+        ctk.CTkButton(frame, text="OK", width=130, fg_color="#2e9e4f",
+                      hover_color="#24823c", command=win.destroy).pack(pady=(0, 16))
+
+        win.update_idletasks()
+        w, h = max(420, win.winfo_reqwidth()), win.winfo_reqheight()
+        px, py = self.winfo_rootx(), self.winfo_rooty()
+        pw, ph = self.winfo_width(), self.winfo_height()
+        win.geometry(f"{w}x{h}+{px + (pw - w)//2}+{py + (ph - h)//2}")
+        try:
+            win.transient(self)
+            win.grab_set()
+            win.lift()
+            self.wait_window(win)
+        except Exception:
+            pass
 
     # ---- login screen -------------------------------------------------
     def show_login(self):
@@ -257,6 +292,8 @@ class VaultApp(ctk.CTk):
                             command=self._menu_set_drive)
         setmenu.add_command(label="ทดสอบการเชื่อมต่อ Google Drive   (Test connection)",
                             command=self._menu_test_drive)
+        setmenu.add_command(label="อีเมลที่อนุญาตถอดรหัส Online…   (Allowed emails)",
+                            command=self._menu_allowed_emails)
         menubar.add_cascade(label="ตั้งค่า / Settings", menu=setmenu)
 
         self.config(menu=menubar)
@@ -630,6 +667,27 @@ class VaultApp(ctk.CTk):
         self.settings["net_mode"] = value
         self._save_settings()
 
+    def _menu_allowed_emails(self):
+        """Manage the allow-list of Gmail addresses permitted to decrypt Online."""
+        current = ", ".join(self.allowed_emails)
+        dlg = ctk.CTkInputDialog(
+            title="อีเมลที่อนุญาตถอดรหัส Online",
+            text=("ใส่อีเมล Gmail ที่อนุญาตให้ถอดรหัสไฟล์ Online\n"
+                  "คั่นหลายอีเมลด้วยเครื่องหมายจุลภาค (,)\n"
+                  "เว้นว่าง = เฉพาะบัญชีของคุณเองเท่านั้น\n\n"
+                  f"ปัจจุบัน: {current or '(ไม่มี)'}"))
+        raw = dlg.get_input()
+        if raw is None:
+            return
+        emails = [e.strip() for e in raw.replace(";", ",").split(",") if e.strip()]
+        self.allowed_emails = emails
+        self.settings["allowed_emails"] = emails
+        self._save_settings()
+        self._show_success(
+            "อีเมลที่อนุญาต",
+            ("อนุญาต " + str(len(emails)) + " อีเมล:\n" + "\n".join(emails))
+            if emails else "ล้างรายชื่อแล้ว — เฉพาะบัญชีของคุณเองถอดรหัส Online ได้")
+
     # ---- Google Drive ------------------------------------------------
     def _drive_lib_ok(self) -> bool:
         if not _HAS_DRIVE_LIB:
@@ -834,6 +892,7 @@ class VaultApp(ctk.CTk):
             text=("กำลังอัปโหลดขึ้น Google Drive…" if online else "กำลังเข้ารหัส…"))
         pw = self.password
         fmt = self.out_format
+        emails = list(self.allowed_emails)
         encrypt = (pdf_disguise.encrypt_file_to_jpg if fmt == "JPG"
                    else pdf_disguise.encrypt_file_to_pdf)
 
@@ -845,7 +904,8 @@ class VaultApp(ctk.CTk):
             done, failed = [], []
             for s in srcs:
                 try:
-                    done.append(encrypt(s, out_dir, pw, online=online, drive=drive))
+                    done.append(encrypt(s, out_dir, pw, online=online, drive=drive,
+                                        allowed_emails=emails))
                 except Exception as exc:
                     failed.append(f"{Path(s).name}: {exc}")
             return done, failed
@@ -882,7 +942,9 @@ class VaultApp(ctk.CTk):
                f"นำไฟล์ {fmt} เหล่านี้กลับมากด 'ถอดรหัสไฟล์' เพื่อได้ไฟล์เดิมคืน")
         if failed:
             msg += "\n\nทำไม่สำเร็จ:\n" + "\n".join(failed)
-        messagebox.showinfo(f"Encrypted to {fmt}", msg)
+            messagebox.showwarning(f"Encrypted to {fmt}", msg)
+        else:
+            self._show_success("เข้ารหัสสำเร็จ", msg)
 
     # ---- menu: decrypt files back to usable originals -----------------
     def _menu_decrypt(self):
@@ -943,11 +1005,14 @@ class VaultApp(ctk.CTk):
     def _decrypt_done(self, done, failed, out_dir):
         self._clear_pending()     # dropped files have been handled
         self.dash_status.configure(text=f"✓ ถอดรหัสแล้ว {len(done)} ไฟล์")
-        msg = (f"ถอดรหัสคืนสภาพ {len(done)} ไฟล์ ไว้ที่:\n{out_dir}"
-               if done else "ไม่มีไฟล์ที่ถอดรหัสสำเร็จ")
         if failed:
+            msg = (f"ถอดรหัสสำเร็จ {len(done)} ไฟล์ ไว้ที่:\n{out_dir}"
+                   if done else "ไม่มีไฟล์ที่ถอดรหัสสำเร็จ")
             msg += "\n\nทำไม่สำเร็จ:\n" + "\n".join(failed)
-        messagebox.showinfo("Decrypted", msg)
+            messagebox.showwarning("Decrypted", msg)
+        else:
+            self._show_success("ถอดรหัสสำเร็จ",
+                               f"ถอดรหัสคืนสภาพ {len(done)} ไฟล์ ไว้ที่:\n{out_dir}")
 
 
 def main():

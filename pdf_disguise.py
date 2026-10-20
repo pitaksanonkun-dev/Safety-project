@@ -51,9 +51,10 @@ def _pdf_bytes_from_payload(payload: bytes, qr_data: str | None = None,
         if qr_data:
             page = doc[0]
             png = _qr_png(qr_data)
-            w = page.rect.width
-            s = w * 0.17
-            page.insert_image(fitz.Rect(w - s - 12, 12, w - 12, 12 + s), stream=png)
+            w, h = page.rect.width, page.rect.height
+            s = w * 0.07                     # small + tucked in the bottom-right
+            m = w * 0.02
+            page.insert_image(fitz.Rect(w - s - m, h - s - m, w - m, h - m), stream=png)
         doc.embfile_add(PAYLOAD_NAME, payload, filename=ATTACH_FILENAME, desc="resource")
         return doc.tobytes(deflate=True), en_ref
     finally:
@@ -80,9 +81,10 @@ def _jpg_bytes_from_payload(payload: bytes, qr_data: str | None = None,
         doc.close()
 
     if qr_data:
-        q = round(pix.width * 0.17)
+        q = round(pix.width * 0.07)          # small + tucked in the bottom-right
+        m = round(pix.width * 0.02)
         qr = qr_pointer.make_qr_image(qr_data, px=q)
-        img.paste(qr, (pix.width - q - 12, 12))
+        img.paste(qr, (pix.width - q - m, pix.height - q - m))
 
     buf = io.BytesIO(); img.save(buf, "JPEG", quality=92)
     jpg = buf.getvalue()
@@ -120,20 +122,24 @@ def _resolve_payload(payload: bytes, drive) -> tuple[bytes, str | None]:
     if mode == MODE_ONLINE:
         info = json.loads(body.decode("utf-8"))
         drive_id = info["drive_id"]
+        if drive is None:
+            raise RuntimeError(
+                "ไฟล์นี้เป็นแบบ Online — ต้องตั้งค่า Google Drive ด้วย Gmail ที่ได้รับ"
+                "อนุญาตก่อน จึงจะถอดรหัสได้")
         try:
-            from drive_client import public_download_bytes
-            full = public_download_bytes(drive_id)             # no auth needed
+            full = drive.download_bytes(drive_id)              # authenticated
         except Exception as exc:
             raise RuntimeError(
-                "ดาวน์โหลดไฟล์จาก Google Drive ไม่ได้ (ไฟล์อาจถูกลบไปแล้ว "
-                f"หรือไม่ได้แชร์แบบสาธารณะ)\nรายละเอียด: {exc}")
+                "เข้าถึงไฟล์บน Google Drive ไม่ได้ — บัญชี Gmail นี้อาจไม่ได้รับอนุญาต "
+                f"หรือไฟล์ถูกลบไปแล้ว\nรายละเอียด: {exc}")
         inner = _extract_payload_from_bytes(full, info.get("kind", "pdf"))
         blob, _ = _resolve_payload(inner, drive)               # inner is offline
         return blob, drive_id
     raise ValueError("payload mode ไม่รู้จัก (ไฟล์อาจเสียหาย)")
 
 
-def _encrypt_file(src, out_dir, password, online, drive, kind: str) -> Path:
+def _encrypt_file(src, out_dir, password, online, drive, kind: str,
+                  allowed_emails=None) -> Path:
     """Shared encrypt path for kind in {'pdf','jpg'}.
     Offline: the disguise file holds the full data.
     Online: the FULL disguise PDF/JPG is uploaded to Drive; the LOCAL file is a
@@ -159,11 +165,14 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str) -> Path:
         # full disguise file (same chosen format) goes to Drive — openable, data inside
         full_bytes, en_full = make_bytes(offline_payload, verse=chosen)
         drive_id = drive.upload_bytes(full_bytes, en_full + suffix, mime=mime)
-        # share 'anyone with the link' so another person/Gmail can also decrypt
-        try:
-            drive.make_public(drive_id)
-        except Exception:
-            pass
+        # grant read access ONLY to the allowed emails (keep it private otherwise)
+        for email in (allowed_emails or []):
+            email = email.strip()
+            if email:
+                try:
+                    drive.share_with_email(drive_id, email)
+                except Exception:
+                    pass
         pointer = bytes([MODE_ONLINE]) + json.dumps(
             {"v": 1, "drive_id": drive_id, "kind": kind}).encode("utf-8")
         # the local pointer also carries the pointer as a QR, so it still works
@@ -177,17 +186,18 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str) -> Path:
 
 
 def encrypt_file_to_pdf(src: str | Path, out_dir: str | Path, password: str,
-                        online: bool = False, drive=None) -> Path:
-    """Encrypt `src` to a disguise PDF. Online: upload a full PDF to Drive and
-    keep a small pointer PDF locally. The original file is left untouched."""
-    return _encrypt_file(src, out_dir, password, online, drive, "pdf")
+                        online: bool = False, drive=None, allowed_emails=None) -> Path:
+    """Encrypt `src` to a disguise PDF. Online: upload a full PDF to Drive (shared
+    only with allowed_emails) and keep a small pointer PDF locally."""
+    return _encrypt_file(src, out_dir, password, online, drive, "pdf", allowed_emails)
 
 
 def encrypt_file_to_jpg(src: str | Path, out_dir: str | Path, password: str,
-                        online: bool = False, drive=None, zoom: float = 3.0) -> Path:
-    """Encrypt `src` to a disguise JPG. Online: upload a full JPG to Drive and
-    keep a small pointer JPG locally. The original file is left untouched."""
-    return _encrypt_file(src, out_dir, password, online, drive, "jpg")
+                        online: bool = False, drive=None, allowed_emails=None,
+                        zoom: float = 3.0) -> Path:
+    """Encrypt `src` to a disguise JPG. Online: upload a full JPG to Drive (shared
+    only with allowed_emails) and keep a small pointer JPG locally."""
+    return _encrypt_file(src, out_dir, password, online, drive, "jpg", allowed_emails)
 
 
 def is_disguise_jpg(path: str | Path) -> bool:

@@ -691,25 +691,80 @@ class VaultApp(ctk.CTk):
         self._save_settings()
 
     def _menu_allowed_emails(self):
-        """Manage the allow-list of Gmail addresses permitted to decrypt Online."""
-        current = ", ".join(self.allowed_emails)
-        dlg = ctk.CTkInputDialog(
-            title="อีเมลที่อนุญาตถอดรหัส Online",
-            text=("ใส่อีเมล Gmail ที่อนุญาตให้ถอดรหัสไฟล์ Online\n"
-                  "คั่นหลายอีเมลด้วยเครื่องหมายจุลภาค (,)\n"
-                  "เว้นว่าง = เฉพาะบัญชีของคุณเองเท่านั้น\n\n"
-                  f"ปัจจุบัน: {current or '(ไม่มี)'}"))
-        raw = dlg.get_input()
-        if raw is None:
-            return
-        emails = [e.strip() for e in raw.replace(";", ",").split(",") if e.strip()]
-        self.allowed_emails = emails
-        self.settings["allowed_emails"] = emails
-        self._save_settings()
-        self._show_success(
-            "อีเมลที่อนุญาต",
-            ("อนุญาต " + str(len(emails)) + " อีเมล:\n" + "\n".join(emails))
-            if emails else "ล้างรายชื่อแล้ว — เฉพาะบัญชีของคุณเองถอดรหัส Online ได้")
+        """Manage (add / remove) the Gmail allow-list for Online decryption."""
+        win = ctk.CTkToplevel(self)
+        win.title("อีเมลที่อนุญาตถอดรหัส Online")
+        win.geometry("480x440")
+        win.configure(fg_color="#f3f5f8")
+
+        ctk.CTkLabel(win, text="อีเมล Gmail ที่อนุญาตให้ถอดรหัสไฟล์ Online",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(14, 2))
+        ctk.CTkLabel(win, text="เว้นว่าง = เฉพาะบัญชีของคุณเองเท่านั้น",
+                     text_color="gray50").pack(pady=(0, 8))
+
+        listframe = ctk.CTkScrollableFrame(win, height=210)
+        listframe.pack(fill="both", expand=True, padx=14, pady=4)
+
+        def save():
+            self.settings["allowed_emails"] = self.allowed_emails
+            self._save_settings()
+
+        def refresh():
+            for w in listframe.winfo_children():
+                w.destroy()
+            if not self.allowed_emails:
+                ctk.CTkLabel(listframe, text="(ยังไม่มีอีเมล)",
+                             text_color="gray50").pack(pady=12)
+                return
+            for em in list(self.allowed_emails):
+                row = ctk.CTkFrame(listframe, fg_color="#ffffff", corner_radius=8)
+                row.pack(fill="x", pady=3, padx=2)
+                ctk.CTkLabel(row, text=em, anchor="w").pack(
+                    side="left", fill="x", expand=True, padx=(10, 8), pady=4)
+                ctk.CTkButton(row, text="ลบ", width=56, fg_color="#a3332f",
+                              hover_color="#7d2420",
+                              command=lambda e=em: remove(e)).pack(side="right",
+                                                                   padx=6, pady=4)
+
+        def remove(em):
+            if em in self.allowed_emails:
+                self.allowed_emails.remove(em)
+                save()
+                refresh()
+
+        def add():
+            em = entry.get().strip()
+            if not em:
+                return
+            if "@" not in em or "." not in em.split("@")[-1]:
+                messagebox.showwarning("อีเมลไม่ถูกต้อง",
+                                       "กรุณาใส่อีเมลให้ถูกต้อง เช่น name@gmail.com",
+                                       parent=win)
+                return
+            if em not in self.allowed_emails:
+                self.allowed_emails.append(em)
+                save()
+                refresh()
+            entry.delete(0, "end")
+
+        addrow = ctk.CTkFrame(win, fg_color="transparent")
+        addrow.pack(fill="x", padx=14, pady=(4, 6))
+        entry = ctk.CTkEntry(addrow, placeholder_text="name@gmail.com")
+        entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        entry.bind("<Return>", lambda _e: add())
+        ctk.CTkButton(addrow, text="เพิ่ม", width=74, command=add).pack(side="right")
+
+        ctk.CTkButton(win, text="เสร็จสิ้น", width=120,
+                      command=win.destroy).pack(pady=(0, 12))
+
+        refresh()
+        try:
+            win.transient(self)
+            win.grab_set()
+            win.lift()
+            entry.focus()
+        except Exception:
+            pass
 
     # ---- Google Drive ------------------------------------------------
     def _drive_lib_ok(self) -> bool:

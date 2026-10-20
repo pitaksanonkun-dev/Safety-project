@@ -120,9 +120,32 @@ class VaultApp(ctk.CTk):
         self.allowed_emails = self.settings.get("allowed_emails") or []   # Online allow-list
         self._drive_client = None            # cached Drive client
 
+        # Make Ctrl+A/C/V/X work in every entry regardless of keyboard layout
+        # (with a Thai layout, Ctrl+V sends a Thai keysym and the default paste
+        # binding never fires — so we match on the physical key's keycode).
+        self.bind_all("<Control-KeyPress>", self._clipboard_keys)
+
         self.container = ctk.CTkFrame(self, fg_color="transparent")
         self.container.pack(fill="both", expand=True)
         self.show_login()
+
+    @staticmethod
+    def _clipboard_keys(event):
+        if not (event.state & 0x0004):        # Control must be held
+            return None
+        key = {65: "all", 67: "<<Copy>>", 86: "<<Paste>>", 88: "<<Cut>>"}.get(
+            event.keycode)                    # A / C / V / X physical keys
+        if key is None:
+            return None
+        w = event.widget
+        try:
+            if key == "all":
+                w.select_range(0, "end"); w.icursor("end")
+            else:
+                w.event_generate(key)
+            return "break"
+        except Exception:
+            return None
 
     # ---- settings -----------------------------------------------------
     def _load_settings(self) -> dict:

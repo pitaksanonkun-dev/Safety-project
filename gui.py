@@ -321,6 +321,8 @@ class VaultApp(ctk.CTk):
                             command=self._menu_set_drive)
         setmenu.add_command(label="ทดสอบการเชื่อมต่อ Google Drive   (Test connection)",
                             command=self._menu_test_drive)
+        setmenu.add_command(label="ออกจากระบบ / สลับบัญชี Google Drive   (Sign out)",
+                            command=self._menu_disconnect_drive)
         setmenu.add_command(label="อีเมลที่อนุญาตถอดรหัส Online…   (Allowed emails)",
                             command=self._menu_allowed_emails)
         menubar.add_cascade(label="ตั้งค่า / Settings", menu=setmenu)
@@ -835,7 +837,9 @@ class VaultApp(ctk.CTk):
                 self.drive_oauth_client = path
                 self.settings["drive_method"] = "oauth"
                 self.settings["drive_oauth_client"] = path
-                self._drive_client = None
+                # a copied token (if any) belongs to the sender — drop it so this
+                # machine signs in as ITS OWN Google account
+                self._forget_drive_login()
             em = setup.get("allowed_emails")
             if em is not None:
                 merged = list(dict.fromkeys(list(self.allowed_emails) + list(em)))
@@ -869,12 +873,33 @@ class VaultApp(ctk.CTk):
         self.settings["drive_oauth_client"] = f
         self.settings["drive_folder_id"] = folder
         self._save_settings()
-        self._drive_client = None
+        # a new client means a new account — drop any cached login so it asks again
+        self._forget_drive_login()
         messagebox.showinfo(
             "Google Drive (OAuth)",
             "ครั้งแรกจะเปิดหน้าเว็บให้คุณ 'อนุญาต' การเข้าถึง Google Drive\n"
-            "เลือกบัญชี → กด Continue/อนุญาต จนเสร็จ แล้วกลับมาที่โปรแกรม")
+            "เลือก 'บัญชีของเครื่องนี้' → กด Continue/อนุญาต จนเสร็จ แล้วกลับมาที่โปรแกรม")
         self._menu_test_drive()      # triggers the browser consent once
+
+    def _forget_drive_login(self):
+        """Delete the cached OAuth token so the next connection asks to sign in
+        again (used when switching Google account / client)."""
+        self._drive_client = None
+        try:
+            if os.path.exists(self.drive_token_path):
+                os.remove(self.drive_token_path)
+        except Exception:
+            pass
+
+    def _menu_disconnect_drive(self):
+        """Sign out of Google Drive on this machine (switch account)."""
+        if messagebox.askyesno(
+                "ออกจากระบบ Google Drive",
+                "ต้องการออกจากบัญชี Google Drive บนเครื่องนี้ไหม?\n"
+                "ครั้งต่อไปที่ใช้ Online จะให้ล็อกอินใหม่ (เลือกบัญชีอื่นได้)"):
+            self._forget_drive_login()
+            messagebox.showinfo("Google Drive",
+                                "ออกจากระบบแล้ว — ครั้งต่อไปจะให้ล็อกอินใหม่")
 
     def _menu_set_drive(self):
         """Service Account — only works with a Shared Drive (Workspace)."""

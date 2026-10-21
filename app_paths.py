@@ -10,8 +10,14 @@ Two very different kinds of path:
 
   state_dir()     PERSISTENT user state (vault_store/, app_settings.json,
                   drive_token.json, ...). This MUST survive between runs, so it
-                  must NEVER be the temporary _MEIPASS folder. When frozen we use
-                  the folder the .exe actually sits in; otherwise the source dir.
+                  must NEVER be the temporary _MEIPASS folder.
+
+                  For a built .exe it lives in a PER-USER folder under
+                  %LOCALAPPDATA% — deliberately NOT next to the .exe — so that
+                  giving the .exe (or even its whole folder) to someone else
+                  never carries your vault/login along, and every Windows user /
+                  machine gets their own independent vault. For plain .py it is
+                  the source folder (developer convenience).
 
 Getting this wrong in onefile mode would put the vault in a temp folder that
 Windows wipes — i.e. silent data loss. Hence this single source of truth.
@@ -19,8 +25,11 @@ Windows wipes — i.e. silent data loss. Hence this single source of truth.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+APP_FOLDER = "HealthWellness"       # per-user state folder name under LOCALAPPDATA
 
 
 def is_frozen() -> bool:
@@ -37,10 +46,17 @@ def resource_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def exe_dir() -> Path:
+    """Folder the .exe sits in (used only for one-time migration)."""
+    return Path(sys.executable).resolve().parent
+
+
 def state_dir() -> Path:
     """Directory for persistent user state; created if missing."""
     if is_frozen():
-        d = Path(sys.executable).resolve().parent
+        base = (os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+                or str(Path.home()))
+        d = Path(base) / APP_FOLDER
     else:
         d = Path(__file__).resolve().parent
     try:

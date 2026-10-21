@@ -35,6 +35,9 @@ selftest_result.txt
 # the clean "portable" copies this project can generate
 Document Organizer (portable) */
 
+# manual backup made by make_manual.py (original is already in git history)
+*_backup.pdf
+
 # Test / scratch artifacts
 _t/
 sbx_store/

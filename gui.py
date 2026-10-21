@@ -1200,31 +1200,29 @@ class VaultApp(ctk.CTk):
             messagebox.showerror("Open folder", f"เปิดโฟลเดอร์ไม่ได้:\n{exc}")
 
     def _menu_export_portable(self):
-        """Build a clean, shareable copy of the program (no vault / token /
-        settings) so it can be given to another machine, independent of this one."""
-        if app_paths.is_frozen():
-            # Running as a built .exe — it is ALREADY a standalone portable copy.
-            exe = Path(sys.executable)
-            messagebox.showinfo(
-                "ชุดแจกจ่าย (.exe)",
-                "โปรแกรมนี้เป็นไฟล์ .exe แบบพกพาอยู่แล้ว\n\n"
-                "ส่งเฉพาะไฟล์ .exe นี้ไปเครื่องอื่นได้เลย (ไม่ต้องมี Python)\n"
-                f"{exe.name}\n\n"
-                "อย่าส่งโฟลเดอร์ vault_store / ไฟล์ตั้งค่าไปด้วย — เครื่องปลายทาง "
-                "จะสร้าง vault และกุญแจของตัวเองใหม่ตอน login ครั้งแรก")
-            try:
-                self._open_in_explorer(exe.resolve().parent)
-            except Exception:
-                pass
-            return
+        """Pick a destination folder, then immediately produce a clean, shareable
+        copy there (no vault / token / settings). Works both as .py (copies the
+        source) and as a built .exe (copies the single .exe)."""
+        frozen = app_paths.is_frozen()
         parent = filedialog.askdirectory(
-            title="จะบันทึกชุดแจกจ่ายไว้ที่ไหน / Save the portable copy to…",
+            title="เลือกโฟลเดอร์ที่จะสร้างชุดแจกจ่าย (ส่งให้ผู้อื่น)",
             initialdir=str(_APP_DIR.parent))
         if not parent:
             return
         self.dash_status.configure(text="กำลังสร้างชุดแจกจ่าย…")
 
         def work():
+            if frozen:
+                # the .exe IS the whole program — copy just that file, ready to send
+                import shutil
+                from datetime import datetime
+                exe = Path(sys.executable)
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                dest = Path(parent) / f"Document Organizer (portable) {stamp}"
+                dest.mkdir(parents=True, exist_ok=False)
+                shutil.copy2(exe, dest / exe.name)
+                return {"folder": str(dest), "zip": None,
+                        "copied": [exe.name], "leaked": [], "exe": True}
             return make_portable.build_portable(
                 src_dir=str(_APP_DIR), out_parent=parent, make_zip=True)
 
@@ -1234,18 +1232,23 @@ class VaultApp(ctk.CTk):
                 messagebox.showerror("Export portable", str(err))
                 return
             self.dash_status.configure(text="✓ สร้างชุดแจกจ่ายแล้ว")
-            n = len(info["copied"])
             warn = ("\n\n⚠️ ตรวจพบและลบไฟล์ลับที่หลุดเข้ามา: "
                     + ", ".join(info["leaked"])) if info["leaked"] else ""
-            self._show_success(
-                "สร้างชุดแจกจ่ายสำเร็จ",
-                f"คัดลอกโปรแกรม {n} รายการ (ไม่รวม vault/บัญชี/การตั้งค่าของคุณ)\n\n"
-                f"โฟลเดอร์:\n{info['folder']}\n\n"
-                f"ไฟล์ zip สำหรับส่ง:\n{info['zip']}\n\n"
-                f"เครื่องปลายทางจะสร้าง vault และกุญแจของตัวเองใหม่ตอน login ครั้งแรก"
-                f"{warn}")
+            if info.get("exe"):
+                msg = (f"คัดลอกไฟล์ .exe พร้อมส่งแล้ว (ไม่ต้องมี Python ที่ปลายทาง)\n\n"
+                       f"โฟลเดอร์:\n{info['folder']}\n\n"
+                       f"ส่งไฟล์ .exe ในโฟลเดอร์นี้ให้ผู้อื่นได้เลย — เครื่องปลายทาง "
+                       f"จะสร้าง vault และกุญแจของตัวเองใหม่ตอน login ครั้งแรก "
+                       f"(ไม่มี vault/บัญชีของคุณติดไป)")
+            else:
+                msg = (f"คัดลอกโปรแกรม {len(info['copied'])} รายการ "
+                       f"(ไม่รวม vault/บัญชี/การตั้งค่าของคุณ)\n\n"
+                       f"โฟลเดอร์:\n{info['folder']}\n\n"
+                       f"ไฟล์ zip สำหรับส่ง:\n{info['zip']}\n\n"
+                       f"เครื่องปลายทางจะสร้าง vault และกุญแจของตัวเองใหม่ตอน login ครั้งแรก")
+            self._show_success("สร้างชุดแจกจ่ายสำเร็จ", msg + warn)
             try:
-                self._open_in_explorer(Path(info["folder"]).parent)
+                self._open_in_explorer(Path(info["folder"]))
             except Exception:
                 pass
 

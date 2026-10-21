@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -49,9 +50,10 @@ try:
 except Exception:          # google libs not installed
     _HAS_DRIVE_LIB = False
 
-# Anchor the store to the program folder (next to this file), so the vault is
-# always found regardless of the working directory a launcher starts us in.
-_APP_DIR = Path(__file__).resolve().parent
+# Persistent user state lives next to the program (the .py folder, or the .exe
+# folder when frozen) — NEVER the temp unpack dir — so the vault survives runs.
+import app_paths
+_APP_DIR = app_paths.state_dir()
 STORE_DIR = str(_APP_DIR / "vault_store")
 SETTINGS_PATH = _APP_DIR / "app_settings.json"
 ctk.set_appearance_mode("dark")
@@ -1200,6 +1202,21 @@ class VaultApp(ctk.CTk):
     def _menu_export_portable(self):
         """Build a clean, shareable copy of the program (no vault / token /
         settings) so it can be given to another machine, independent of this one."""
+        if app_paths.is_frozen():
+            # Running as a built .exe — it is ALREADY a standalone portable copy.
+            exe = Path(sys.executable)
+            messagebox.showinfo(
+                "ชุดแจกจ่าย (.exe)",
+                "โปรแกรมนี้เป็นไฟล์ .exe แบบพกพาอยู่แล้ว\n\n"
+                "ส่งเฉพาะไฟล์ .exe นี้ไปเครื่องอื่นได้เลย (ไม่ต้องมี Python)\n"
+                f"{exe.name}\n\n"
+                "อย่าส่งโฟลเดอร์ vault_store / ไฟล์ตั้งค่าไปด้วย — เครื่องปลายทาง "
+                "จะสร้าง vault และกุญแจของตัวเองใหม่ตอน login ครั้งแรก")
+            try:
+                self._open_in_explorer(exe.resolve().parent)
+            except Exception:
+                pass
+            return
         parent = filedialog.askdirectory(
             title="จะบันทึกชุดแจกจ่ายไว้ที่ไหน / Save the portable copy to…",
             initialdir=str(_APP_DIR.parent))
@@ -1484,7 +1501,35 @@ class VaultApp(ctk.CTk):
                                f"ถอดรหัสคืนสภาพ {len(done)} ไฟล์ ไว้ที่:\n{out_dir}")
 
 
+def _selftest() -> int:
+    """Headless check that bundled assets (fonts, template) resolve and a card
+    renders — used to verify a built .exe without opening a window. Writes the
+    result to a file too, since a windowed .exe has no console to print to."""
+    import traceback
+    out = app_paths.state_dir() / "selftest_result.txt"
+    try:
+        import verse_card
+        doc, _ref = verse_card.render_card_doc()
+        doc.close()
+        msg = (f"SELFTEST OK | frozen={app_paths.is_frozen()} | "
+               f"resource_dir={app_paths.resource_dir()} | "
+               f"state_dir={app_paths.state_dir()}")
+        rc = 0
+    except Exception:
+        msg = "SELFTEST FAIL\n" + traceback.format_exc()
+        rc = 1
+    for emit in (lambda: out.write_text(msg, encoding="utf-8"),
+                 lambda: print(msg)):
+        try:
+            emit()
+        except Exception:
+            pass
+    return rc
+
+
 def main():
+    if "--selftest" in sys.argv:
+        sys.exit(_selftest())
     app = VaultApp()
     app.mainloop()
 
@@ -1492,13 +1537,15 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except SystemExit:
+        raise
     except Exception:
         # If launched by double-click there is no console to read; log the
         # traceback to a file and show it, so the error is never lost.
         import traceback
         tb = traceback.format_exc()
         try:
-            Path("error.log").write_text(tb, "utf-8")
+            (app_paths.state_dir() / "error.log").write_text(tb, "utf-8")
         except Exception:
             pass
         try:

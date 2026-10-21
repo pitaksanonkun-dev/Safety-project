@@ -22,7 +22,8 @@ import fitz  # PyMuPDF
 from PIL import Image
 from pythainlp.tokenize import word_tokenize
 
-_APP_DIR = Path(__file__).resolve().parent
+import app_paths
+_APP_DIR = app_paths.resource_dir()          # bundled assets (works as .py or .exe)
 TEMPLATE_PATH = _APP_DIR / "card_template.png"
 
 # TH Sarabun (the standard Thai document font) — bundled with the app so the

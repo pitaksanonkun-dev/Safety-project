@@ -26,6 +26,15 @@ __pycache__/
 *.pyc
 *.pyo
 
+# PyInstaller build artifacts (the .exe is a build output, not source)
+build/
+dist/
+*.exe
+build_log.txt
+selftest_result.txt
+# the clean "portable" copies this project can generate
+Document Organizer (portable) */
+
 # Test / scratch artifacts
 _t/
 sbx_store/

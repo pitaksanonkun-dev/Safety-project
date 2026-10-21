@@ -60,47 +60,42 @@ def _denied(name: str) -> bool:
     return any(fnmatch.fnmatch(name, pat) for pat in DENY)
 
 
-def main() -> int:
+def build_portable(src_dir=None, out_parent=None, make_zip: bool = True) -> dict:
+    """Build a clean copy of the program. Returns a dict with keys:
+    folder, zip, copied (list), leaked (list). Safe to call from the GUI."""
+    src = Path(src_dir).resolve() if src_dir else SRC
+    parent = Path(out_parent).resolve() if out_parent else src.parent
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = SRC.parent / f"Document Organizer (portable) {stamp}"
+    dest = parent / f"Document Organizer (portable) {stamp}"
     dest.mkdir(parents=True, exist_ok=False)
 
-    copied, skipped_secret = [], []
+    copied = []
 
     # 1) every Python module in the top folder (so new code is never forgotten)
-    for p in sorted(SRC.glob("*.py")):
+    for p in sorted(src.glob("*.py")):
         if _denied(p.name):
-            skipped_secret.append(p.name)
             continue
         shutil.copy2(p, dest / p.name)
         copied.append(p.name)
 
     # 2) explicit non-.py files that exist
     for name in INCLUDE_FILES:
-        src = SRC / name
-        if name.endswith(".py"):
-            continue                       # already handled by the glob
-        if _denied(name):
-            continue
-        if src.exists():
-            shutil.copy2(src, dest / name)
+        if name.endswith(".py") or _denied(name):
+            continue                       # .py already handled by the glob
+        if (src / name).exists():
+            shutil.copy2(src / name, dest / name)
             copied.append(name)
 
     # 3) whitelisted asset directories (filtered against DENY as a safety net)
     for dname in INCLUDE_DIRS:
-        sdir = SRC / dname
-        if not sdir.is_dir():
-            continue
-        shutil.copytree(
-            sdir, dest / dname,
-            ignore=lambda _d, names: [n for n in names if _denied(n)])
-        copied.append(dname + "\\")
+        if (src / dname).is_dir():
+            shutil.copytree(
+                src / dname, dest / dname,
+                ignore=lambda _d, names: [n for n in names if _denied(n)])
+            copied.append(dname + "\\")
 
     # 4) SAFETY NET — scan the finished copy for anything secret that slipped in
-    leaked = []
-    for p in dest.rglob("*"):
-        if p.is_file() and _denied(p.name):
-            leaked.append(p)
+    leaked = [p for p in dest.rglob("*") if p.is_file() and _denied(p.name)]
     for p in leaked:
         try:
             p.unlink()
@@ -108,18 +103,26 @@ def main() -> int:
             pass
 
     # 5) zip it for easy sending
-    archive = shutil.make_archive(str(dest), "zip", root_dir=dest.parent,
-                                  base_dir=dest.name)
+    archive = None
+    if make_zip:
+        archive = shutil.make_archive(str(dest), "zip", root_dir=dest.parent,
+                                      base_dir=dest.name)
 
+    return {"folder": str(dest), "zip": archive,
+            "copied": copied, "leaked": [p.name for p in leaked]}
+
+
+def main() -> int:
+    info = build_portable()
     print("สร้างชุดแจกจ่ายสะอาดเรียบร้อย\n")
-    print("โฟลเดอร์:", dest)
-    print("ไฟล์ zip :", archive)
-    print(f"\nรวมไฟล์ {len(copied)} รายการ:")
-    for n in copied:
+    print("โฟลเดอร์:", info["folder"])
+    print("ไฟล์ zip :", info["zip"])
+    print(f"\nรวมไฟล์ {len(info['copied'])} รายการ:")
+    for n in info["copied"]:
         print("   +", n)
-    if leaked:
+    if info["leaked"]:
         print("\n⚠️  ตรวจพบและลบไฟล์ลับที่หลุดเข้ามาออกแล้ว:",
-              ", ".join(p.name for p in leaked))
+              ", ".join(info["leaked"]))
     print("\nสิ่งที่ 'ไม่' ถูกใส่ไป (เพื่อความเป็นอิสระ/ปลอดภัย): vault_store, "
           "app_settings.json, drive_token.json, client_secret*, *.seed, "
           "ไฟล์สำรอง และ __pycache__")

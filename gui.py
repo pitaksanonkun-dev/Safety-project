@@ -42,6 +42,7 @@ from vault import VaultStore
 import file_crypto
 import pdf_disguise
 import recipient_crypto
+import make_portable
 try:
     import drive_client
     _HAS_DRIVE_LIB = True
@@ -335,6 +336,9 @@ class VaultApp(ctk.CTk):
                             command=self._menu_my_public_key)
         setmenu.add_command(label="รายชื่อผู้รับ (public key) สำหรับ recipient-key…   (Contacts)",
                             command=self._menu_contacts)
+        setmenu.add_separator()
+        setmenu.add_command(label="สร้างชุดแจกจ่ายสำหรับเครื่องอื่น…   (Export portable copy)",
+                            command=self._menu_export_portable)
         menubar.add_cascade(label="ตั้งค่า / Settings", menu=setmenu)
 
         self.config(menu=menubar)
@@ -1192,6 +1196,43 @@ class VaultApp(ctk.CTk):
                  else ["xdg-open", str(path)]))
         except Exception as exc:
             messagebox.showerror("Open folder", f"เปิดโฟลเดอร์ไม่ได้:\n{exc}")
+
+    def _menu_export_portable(self):
+        """Build a clean, shareable copy of the program (no vault / token /
+        settings) so it can be given to another machine, independent of this one."""
+        parent = filedialog.askdirectory(
+            title="จะบันทึกชุดแจกจ่ายไว้ที่ไหน / Save the portable copy to…",
+            initialdir=str(_APP_DIR.parent))
+        if not parent:
+            return
+        self.dash_status.configure(text="กำลังสร้างชุดแจกจ่าย…")
+
+        def work():
+            return make_portable.build_portable(
+                src_dir=str(_APP_DIR), out_parent=parent, make_zip=True)
+
+        def after(info, err):
+            if err is not None:
+                self.dash_status.configure(text="สร้างชุดแจกจ่ายไม่สำเร็จ")
+                messagebox.showerror("Export portable", str(err))
+                return
+            self.dash_status.configure(text="✓ สร้างชุดแจกจ่ายแล้ว")
+            n = len(info["copied"])
+            warn = ("\n\n⚠️ ตรวจพบและลบไฟล์ลับที่หลุดเข้ามา: "
+                    + ", ".join(info["leaked"])) if info["leaked"] else ""
+            self._show_success(
+                "สร้างชุดแจกจ่ายสำเร็จ",
+                f"คัดลอกโปรแกรม {n} รายการ (ไม่รวม vault/บัญชี/การตั้งค่าของคุณ)\n\n"
+                f"โฟลเดอร์:\n{info['folder']}\n\n"
+                f"ไฟล์ zip สำหรับส่ง:\n{info['zip']}\n\n"
+                f"เครื่องปลายทางจะสร้าง vault และกุญแจของตัวเองใหม่ตอน login ครั้งแรก"
+                f"{warn}")
+            try:
+                self._open_in_explorer(Path(info["folder"]).parent)
+            except Exception:
+                pass
+
+        self._run_bg(work, after)
 
     def _ensure_out_dir(self) -> str | None:
         """Return the configured output folder, asking once if unset."""

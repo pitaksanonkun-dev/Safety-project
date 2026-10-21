@@ -21,6 +21,7 @@ Dependencies: customtkinter
 """
 from __future__ import annotations
 
+import calendar
 import json
 from datetime import datetime, timedelta
 
@@ -81,7 +82,7 @@ def _load() -> dict:
         d = {}
     d.setdefault("water_goal", 2000)
     d.setdefault("water_log", [])           # [{"ts": "YYYY-MM-DD HH:MM", "ml": int}]
-    d.setdefault("fast_day", "")
+    d.setdefault("fasting_plans", [])       # [{"start": "YYYY-MM-DD HH:MM", "hours": n}]
     d.setdefault("checklist", {k: False for k in DEFAULT_CHECKLIST})
     d.setdefault("sound", True)
     # migrate an old single-total field into one log entry for today
@@ -101,6 +102,74 @@ def _save(d: dict) -> None:
 
 def _font(size=14, weight="normal"):
     return ctk.CTkFont(size=size, weight=weight)
+
+
+THAI_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+               "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
+
+
+class DatePicker(ctk.CTkToplevel):
+    """A small month-grid calendar. Calls on_pick('YYYY-MM-DD') when a day is
+    chosen. Navigates any month, so dates a month+ ahead are selectable."""
+    def __init__(self, master, initial: str, on_pick):
+        super().__init__(master)
+        self.on_pick = on_pick
+        self.title("เลือกวันที่")
+        self.geometry("308x300")
+        self.configure(fg_color=CARD)
+        try:
+            d = datetime.strptime((initial or "").strip(), "%Y-%m-%d")
+        except Exception:
+            d = datetime.now()
+        self.y, self.m = d.year, d.month
+
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.pack(fill="x", padx=10, pady=(10, 4))
+        ctk.CTkButton(head, text="◀", width=36, fg_color=ROW, hover_color=STROKE,
+                      command=lambda: self._shift(-1)).pack(side="left")
+        self.title_lbl = ctk.CTkLabel(head, text="", font=_font(14, "bold"),
+                                      text_color=TEXT)
+        self.title_lbl.pack(side="left", expand=True)
+        ctk.CTkButton(head, text="▶", width=36, fg_color=ROW, hover_color=STROKE,
+                      command=lambda: self._shift(1)).pack(side="right")
+        self.grid_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.grid_frame.pack(padx=10, pady=4)
+        self._render()
+        try:
+            self.transient(master); self.grab_set(); self.lift()
+        except Exception:
+            pass
+
+    def _shift(self, delta):
+        m = self.m - 1 + delta
+        self.y += m // 12
+        self.m = m % 12 + 1
+        self._render()
+
+    def _render(self):
+        for w in self.grid_frame.winfo_children():
+            w.destroy()
+        self.title_lbl.configure(text=f"{THAI_MONTHS[self.m-1]} {self.y}")
+        for i, h in enumerate(["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"]):
+            ctk.CTkLabel(self.grid_frame, text=h, width=36, text_color=MUTED,
+                         font=_font(11)).grid(row=0, column=i, padx=1, pady=1)
+        today = datetime.now().strftime("%Y-%m-%d")
+        for r, week in enumerate(calendar.monthcalendar(self.y, self.m), start=1):
+            for c, day in enumerate(week):
+                if day == 0:
+                    continue
+                ds = f"{self.y:04d}-{self.m:02d}-{day:02d}"
+                ctk.CTkButton(
+                    self.grid_frame, text=str(day), width=36, height=30,
+                    fg_color=ACCENT if ds == today else ROW, hover_color=ACCENT_D,
+                    text_color=TEXT, command=lambda x=ds: self._pick(x)
+                ).grid(row=r, column=c, padx=1, pady=1)
+
+    def _pick(self, ds):
+        try:
+            self.on_pick(ds)
+        finally:
+            self.destroy()
 
 
 class HealthApp(ctk.CTk):
@@ -212,15 +281,15 @@ class HealthApp(ctk.CTk):
         # date navigator ------------------------------------------------
         nav = self._card(tab)
         nav.pack(fill="x", padx=4, pady=6)
-        ctk.CTkButton(nav, text="◀", width=38, fg_color=ROW, hover_color=STROKE,
-                      command=lambda: self._shift_day(-1)).pack(side="left", padx=(10, 6), pady=10)
-        self.date_entry = ctk.CTkEntry(nav, textvariable=self.view_date, width=130,
-                                       justify="center", fg_color=ROW, border_color=STROKE)
-        self.date_entry.pack(side="left", padx=4, pady=10)
-        self.date_entry.bind("<Return>", lambda _e: self._refresh_water())
-        ctk.CTkButton(nav, text="▶", width=38, fg_color=ROW, hover_color=STROKE,
-                      command=lambda: self._shift_day(1)).pack(side="left", padx=6, pady=10)
-        ctk.CTkButton(nav, text="วันนี้", width=60, fg_color=ROW, hover_color=STROKE,
+        ctk.CTkButton(nav, text="◀", width=34, fg_color=ROW, hover_color=STROKE,
+                      command=lambda: self._shift_day(-1)).pack(side="left", padx=(10, 4), pady=10)
+        self.date_btn = ctk.CTkButton(nav, text="📅 " + self.view_date.get(), width=150,
+                                      fg_color=ROW, hover_color=STROKE, text_color=TEXT,
+                                      command=self._pick_water_date)
+        self.date_btn.pack(side="left", padx=4, pady=10)
+        ctk.CTkButton(nav, text="▶", width=34, fg_color=ROW, hover_color=STROKE,
+                      command=lambda: self._shift_day(1)).pack(side="left", padx=4, pady=10)
+        ctk.CTkButton(nav, text="วันนี้", width=56, fg_color=ROW, hover_color=STROKE,
                       command=self._set_today).pack(side="right", padx=10, pady=10)
 
         # total + progress (double-click here opens the hidden prompt) ---
@@ -292,6 +361,10 @@ class HealthApp(ctk.CTk):
         self.view_date.set(self._today())
         self._refresh_water()
 
+    def _pick_water_date(self):
+        DatePicker(self, self.view_date.get().strip(),
+                   lambda ds: (self.view_date.set(ds), self._refresh_water()))
+
     def _refresh_water(self):
         date_str = self.view_date.get().strip()
         try:
@@ -299,6 +372,8 @@ class HealthApp(ctk.CTk):
         except Exception:
             self.water_status.configure(text="รูปแบบวันที่ควรเป็น YYYY-MM-DD", text_color=AMBER)
             return
+        if hasattr(self, "date_btn"):
+            self.date_btn.configure(text="📅 " + date_str)
         goal = max(1, int(self.data["water_goal"]))
         total = self._wtotal(date_str)
         self.water_total_lbl.configure(text=f"{total} ml")
@@ -404,39 +479,150 @@ class HealthApp(ctk.CTk):
         self._open_vault = True        # main() opens the real vault after close
         self.destroy()
 
-    # ---- Fasting timer ---------------------------------------------
+    # ---- Fasting timer (schedulable plans) --------------------------
     def _build_fasting(self, tab):
         tab.configure(fg_color=BG)
-        ctk.CTkLabel(tab, text="⏱ Intermittent Fasting (17:7)", font=_font(17, "bold"),
-                     text_color=TEXT).pack(pady=(14, 2), anchor="w", padx=6)
+        ctk.CTkLabel(tab, text="⏱ Intermittent Fasting", font=_font(17, "bold"),
+                     text_color=TEXT).pack(pady=(14, 6), anchor="w", padx=6)
+
         card = self._card(tab)
-        card.pack(fill="x", padx=4, pady=10)
-        ctk.CTkLabel(card, text=f"ช่วงทานอาหาร  {EAT_START:02d}:00 – {EAT_END:02d}:00 น.",
-                     text_color=MUTED, font=_font(12)).pack(pady=(16, 6))
-        self.fast_state = ctk.CTkLabel(card, text="", font=_font(16, "bold"))
-        self.fast_state.pack()
-        self.fast_count = ctk.CTkLabel(card, text="", font=_font(40, "bold"),
+        card.pack(fill="x", padx=4, pady=6)
+        self.fast_state = ctk.CTkLabel(card, text="", font=_font(15, "bold"))
+        self.fast_state.pack(pady=(14, 2))
+        self.fast_count = ctk.CTkLabel(card, text="", font=_font(36, "bold"),
                                        text_color=TEXT)
-        self.fast_count.pack(pady=8)
+        self.fast_count.pack(pady=4)
         self.fast_hint = ctk.CTkLabel(card, text="", text_color=MUTED, font=_font(12))
-        self.fast_hint.pack(pady=(0, 18))
+        self.fast_hint.pack(pady=(0, 14))
+
+        # add a plan: start date (calendar) + time + duration -----------
+        form = self._card(tab)
+        form.pack(fill="x", padx=4, pady=6)
+        self.fast_date = ctk.StringVar(value=self._today())
+        r1 = ctk.CTkFrame(form, fg_color="transparent")
+        r1.pack(fill="x", padx=12, pady=(12, 4))
+        ctk.CTkLabel(r1, text="เริ่ม", text_color=MUTED, font=_font(12)).pack(side="left")
+        self.fast_date_btn = ctk.CTkButton(
+            r1, text="📅 " + self.fast_date.get(), width=140, fg_color=ROW,
+            hover_color=STROKE, text_color=TEXT, command=self._pick_fast_date)
+        self.fast_date_btn.pack(side="left", padx=6)
+        self.fast_time = ctk.CTkEntry(r1, width=64, justify="center", fg_color=ROW,
+                                      border_color=STROKE)
+        self.fast_time.insert(0, "18:00")
+        self.fast_time.pack(side="left", padx=4)
+        r2 = ctk.CTkFrame(form, fg_color="transparent")
+        r2.pack(fill="x", padx=12, pady=(2, 12))
+        ctk.CTkLabel(r2, text="ระยะเวลา (ชม.)", text_color=MUTED, font=_font(12)).pack(side="left")
+        self.fast_hours = ctk.CTkEntry(r2, width=60, justify="center", fg_color=ROW,
+                                       border_color=STROKE)
+        self.fast_hours.insert(0, "16")
+        self.fast_hours.pack(side="left", padx=6)
+        ctk.CTkButton(r2, text="+ เพิ่มแผน", width=100, fg_color=ACCENT,
+                      hover_color=ACCENT_D, command=self._add_fast_plan).pack(side="right")
+        self.fast_status = ctk.CTkLabel(form, text="", font=_font(11), text_color=AMBER)
+        self.fast_status.pack(pady=(0, 6))
+
+        ctk.CTkLabel(tab, text="แผนที่ตั้งไว้ (ล่วงหน้าได้เป็นเดือน)", font=_font(13, "bold"),
+                     text_color=MUTED).pack(anchor="w", padx=10, pady=(6, 0))
+        self.fast_list = ctk.CTkScrollableFrame(tab, fg_color=CARD, corner_radius=14,
+                                                height=140)
+        self.fast_list.pack(fill="both", expand=True, padx=4, pady=(4, 6))
+        self._refresh_fast_list()
+
+    def _pick_fast_date(self):
+        DatePicker(self, self.fast_date.get().strip(),
+                   lambda ds: (self.fast_date.set(ds),
+                               self.fast_date_btn.configure(text="📅 " + ds)))
+
+    def _add_fast_plan(self):
+        ds, ts = self.fast_date.get().strip(), self.fast_time.get().strip()
+        try:
+            datetime.strptime(ds, "%Y-%m-%d")
+            datetime.strptime(ts, "%H:%M")
+            hrs = float(self.fast_hours.get().strip())
+            if hrs <= 0 or hrs > 400:
+                raise ValueError
+        except Exception:
+            self.fast_status.configure(text="ตรวจสอบ วันที่, เวลา (HH:MM) และชั่วโมง")
+            return
+        self.data["fasting_plans"].append({"start": f"{ds} {ts}", "hours": hrs})
+        _save(self.data)
+        self.fast_status.configure(text="เพิ่มแผนแล้ว", text_color=GREEN)
+        self._refresh_fast_list()
+
+    def _del_fast_plan(self, plan):
+        self.data["fasting_plans"] = [p for p in self.data["fasting_plans"] if p is not plan]
+        _save(self.data)
+        self._refresh_fast_list()
+
+    def _refresh_fast_list(self):
+        for w in self.fast_list.winfo_children():
+            w.destroy()
+        plans = sorted(self.data.get("fasting_plans", []), key=lambda p: p.get("start", ""))
+        if not plans:
+            ctk.CTkLabel(self.fast_list, text="(ยังไม่มีแผน — เพิ่มจากด้านบน)",
+                         text_color=MUTED).pack(pady=12)
+        for p in plans:
+            try:
+                s = datetime.strptime(p["start"], "%Y-%m-%d %H:%M")
+                e = s + timedelta(hours=float(p["hours"]))
+                txt = (f"{s.day} {THAI_MONTHS[s.month-1]} {s.strftime('%H:%M')} → "
+                       f"{int(float(p['hours']))} ชม. (ถึง {e.strftime('%H:%M')})")
+            except Exception:
+                txt = str(p.get("start", ""))
+            row = ctk.CTkFrame(self.fast_list, fg_color=ROW, corner_radius=10)
+            row.pack(fill="x", pady=3, padx=2)
+            ctk.CTkLabel(row, text="🍽 " + txt, font=_font(12), text_color=TEXT).pack(
+                side="left", padx=(12, 8), pady=8)
+            ctk.CTkButton(row, text="ลบ", width=46, height=26, fg_color="#3a2326",
+                          hover_color=RED, text_color="#f3b4b4",
+                          command=lambda x=p: self._del_fast_plan(x)).pack(
+                side="right", padx=8, pady=6)
+
+    def _fast_lookup(self, now):
+        """Return ('active', end_dt) | ('upcoming', start_dt) | (None, None)."""
+        parsed = []
+        for p in self.data.get("fasting_plans", []):
+            try:
+                s = datetime.strptime(p["start"], "%Y-%m-%d %H:%M")
+                parsed.append((s, s + timedelta(hours=float(p["hours"]))))
+            except Exception:
+                pass
+        for s, e in parsed:
+            if s <= now < e:
+                return "active", e
+        upcoming = sorted(s for s, e in parsed if s > now)
+        if upcoming:
+            return "upcoming", upcoming[0]
+        return None, None
 
     def _is_fasting(self) -> bool:
-        h = datetime.now().hour
+        mode, _ = self._fast_lookup(datetime.now())
+        if mode == "active":
+            return True
+        if mode == "upcoming":
+            return False
+        h = datetime.now().hour                 # no plans -> default 17:7 window
         return not (EAT_START <= h < EAT_END)
 
     def _tick(self):
         now = datetime.now()
-        if self._is_fasting():
-            nxt = now.replace(hour=EAT_START, minute=0, second=0, microsecond=0)
-            if now.hour >= EAT_END:
-                nxt += timedelta(days=1)
-            state, color, hint = "กำลังอดอาหาร", AMBER, "เหลือเวลาถึงช่วงทานอาหาร"
-        else:
-            nxt = now.replace(hour=EAT_END, minute=0, second=0, microsecond=0)
-            state, color, hint = "ทานอาหารได้", GREEN, "เหลือเวลาในช่วงทานอาหาร"
-        rem = nxt - now
-        hh, r = divmod(int(rem.total_seconds()), 3600)
+        mode, target = self._fast_lookup(now)
+        if mode == "active":
+            state, color, hint = "กำลังอดอาหาร", AMBER, "เหลือเวลาถึงสิ้นสุดการอด"
+        elif mode == "upcoming":
+            state, color, hint = "รอเริ่มอดอาหาร", TEAL, "เหลือเวลาถึงแผนถัดไป"
+        else:                                   # fall back to the default window
+            if EAT_START <= now.hour < EAT_END:
+                target = now.replace(hour=EAT_END, minute=0, second=0, microsecond=0)
+                state, color, hint = "ทานอาหารได้", GREEN, "ช่วงทานอาหาร (ค่าเริ่มต้น 17:7)"
+            else:
+                target = now.replace(hour=EAT_START, minute=0, second=0, microsecond=0)
+                if now.hour >= EAT_END:
+                    target += timedelta(days=1)
+                state, color, hint = "กำลังอดอาหาร", AMBER, "ช่วงอดอาหาร (ค่าเริ่มต้น 17:7)"
+        secs = max(0, int((target - now).total_seconds()))
+        hh, r = divmod(secs, 3600)
         mm, ss = divmod(r, 60)
         if hasattr(self, "fast_state"):
             self.fast_state.configure(text=state, text_color=color)
@@ -447,21 +633,61 @@ class HealthApp(ctk.CTk):
         except Exception:
             pass
 
-    # ---- Checklist --------------------------------------------------
+    # ---- Checklist (add / delete items) -----------------------------
     def _build_checklist(self, tab):
         tab.configure(fg_color=BG)
-        ctk.CTkLabel(tab, text="✅ กิจวัตรสุขภาพประจำวัน", font=_font(17, "bold"),
+        ctk.CTkLabel(tab, text="✅ กิจวัตรสุขภาพ", font=_font(17, "bold"),
                      text_color=TEXT).pack(pady=(14, 8), anchor="w", padx=6)
-        card = self._card(tab)
-        card.pack(fill="both", expand=True, padx=4, pady=6)
+        add = self._card(tab)
+        add.pack(fill="x", padx=4, pady=6)
+        self.chk_entry = ctk.CTkEntry(add, placeholder_text="เพิ่มกิจวัตรใหม่…",
+                                      fg_color=ROW, border_color=STROKE)
+        self.chk_entry.pack(side="left", fill="x", expand=True, padx=(12, 6), pady=10)
+        self.chk_entry.bind("<Return>", lambda _e: self._add_chk())
+        ctk.CTkButton(add, text="+ เพิ่ม", width=74, fg_color=ACCENT,
+                      hover_color=ACCENT_D, command=self._add_chk).pack(side="right",
+                                                                        padx=(0, 12))
+        self.chk_list = ctk.CTkScrollableFrame(tab, fg_color=CARD, corner_radius=14)
+        self.chk_list.pack(fill="both", expand=True, padx=4, pady=6)
         self._chk_vars = {}
-        for item in self.data["checklist"]:
+        self._refresh_checklist()
+
+    def _refresh_checklist(self):
+        for w in self.chk_list.winfo_children():
+            w.destroy()
+        self._chk_vars = {}
+        if not self.data["checklist"]:
+            ctk.CTkLabel(self.chk_list, text="(ยังไม่มีรายการ — เพิ่มด้านบน)",
+                         text_color=MUTED).pack(pady=14)
+        for item in list(self.data["checklist"].keys()):
             v = ctk.StringVar(value="on" if self.data["checklist"][item] else "off")
             self._chk_vars[item] = v
-            ctk.CTkCheckBox(card, text=item, variable=v, onvalue="on", offvalue="off",
+            row = ctk.CTkFrame(self.chk_list, fg_color=ROW, corner_radius=10)
+            row.pack(fill="x", pady=3, padx=2)
+            ctk.CTkCheckBox(row, text=item, variable=v, onvalue="on", offvalue="off",
                             fg_color=ACCENT, hover_color=ACCENT_D, text_color=TEXT,
                             command=lambda i=item: self._toggle_chk(i)).pack(
-                anchor="w", padx=22, pady=10)
+                side="left", padx=(12, 8), pady=8, fill="x", expand=True)
+            ctk.CTkButton(row, text="ลบ", width=46, height=26, fg_color="#3a2326",
+                          hover_color=RED, text_color="#f3b4b4",
+                          command=lambda i=item: self._del_chk(i)).pack(
+                side="right", padx=8, pady=6)
+
+    def _add_chk(self):
+        name = self.chk_entry.get().strip()
+        if not name or name in self.data["checklist"]:
+            return
+        self.data["checklist"][name] = False
+        _save(self.data)
+        self.chk_entry.delete(0, "end")
+        self._refresh_checklist()
+        self._refresh_dashboard()
+
+    def _del_chk(self, item):
+        self.data["checklist"].pop(item, None)
+        _save(self.data)
+        self._refresh_checklist()
+        self._refresh_dashboard()
 
     def _toggle_chk(self, item):
         self.data["checklist"][item] = (self._chk_vars[item].get() == "on")
@@ -507,7 +733,7 @@ class HealthApp(ctk.CTk):
         cut immediately. It deliberately does NOT touch or destroy the vault
         itself — the data stays encrypted and recoverable with your password."""
         self.data = {"water_goal": self.data.get("water_goal", 2000),
-                     "water_log": [], "fast_day": "",
+                     "water_log": [], "fasting_plans": [],
                      "checklist": {k: False for k in DEFAULT_CHECKLIST},
                      "sound": self.data.get("sound", True)}
         _save(self.data)
@@ -520,8 +746,10 @@ class HealthApp(ctk.CTk):
             pass
         self._set_today()
         self._refresh_dashboard()
-        for _item, v in getattr(self, "_chk_vars", {}).items():
-            v.set("off")
+        if hasattr(self, "_refresh_checklist"):
+            self._refresh_checklist()
+        if hasattr(self, "_refresh_fast_list"):
+            self._refresh_fast_list()
 
 
 def main():

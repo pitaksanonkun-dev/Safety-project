@@ -58,22 +58,34 @@ class _DriveBase:
             _status, done = downloader.next_chunk()
         return buf.getvalue()
 
-    def make_public(self, file_id: str) -> None:
-        """Let anyone with the link read the file (so other accounts can fetch)."""
+    def make_public(self, file_id: str, role: str = "writer") -> None:
+        """Let anyone with the link access the file. role='writer' lets a
+        recipient DELETE it after a one-time decrypt (needs an authenticated
+        Drive client to issue the delete)."""
         self.service.permissions().create(
-            fileId=file_id, body={"type": "anyone", "role": "reader"},
+            fileId=file_id, body={"type": "anyone", "role": role},
             supportsAllDrives=True).execute()
 
-    def share_with_email(self, file_id: str, email: str) -> None:
-        """Grant read access to ONE specific Google account (allow-list)."""
+    def share_with_email(self, file_id: str, email: str,
+                         role: str = "writer") -> None:
+        """Grant access to ONE specific Google account (allow-list). role='writer'
+        so the recipient can delete the file after a one-time decrypt."""
         self.service.permissions().create(
             fileId=file_id,
-            body={"type": "user", "role": "reader", "emailAddress": email},
+            body={"type": "user", "role": role, "emailAddress": email},
             sendNotificationEmail=False, supportsAllDrives=True).execute()
 
     def delete_file(self, file_id: str) -> None:
-        """Delete a file (only the owner can; callers ignore permission errors)."""
-        self.service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+        """Remove a file after a one-time decrypt. The owner deletes it
+        permanently; a non-owner recipient (shared as writer) can't delete but
+        CAN trash it — either way it can no longer be downloaded/decrypted."""
+        try:
+            self.service.files().delete(
+                fileId=file_id, supportsAllDrives=True).execute()
+        except Exception:
+            self.service.files().update(
+                fileId=file_id, body={"trashed": True},
+                supportsAllDrives=True).execute()
 
     def check(self) -> str:
         about = self.service.about().get(fields="user(emailAddress)").execute()

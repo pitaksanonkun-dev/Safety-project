@@ -124,28 +124,27 @@ def _resolve_payload(payload: bytes, drive) -> tuple[bytes, str | None]:
         drive_id = info["drive_id"]
         kind = info.get("kind", "pdf")
         full = None
-        # 1) try a PUBLIC download first — works with ZERO setup on this machine
-        #    if the file was shared 'anyone with the link'.
-        try:
-            from drive_client import public_download_bytes
-            cand = public_download_bytes(drive_id)
-            _extract_payload_from_bytes(cand, kind)            # validate it's ours
-            full = cand
-        except Exception:
-            full = None
-        # 2) otherwise it is restricted -> need an authorised Google account here
-        if full is None:
-            if drive is None:
-                raise RuntimeError(
-                    "ไฟล์นี้จำกัดเฉพาะอีเมลที่อนุญาต — ต้องตั้งค่า Google Drive ด้วย "
-                    "Gmail ที่ได้รับอนุญาตบนเครื่องนี้ก่อน จึงจะถอดรหัสได้\n"
-                    "(หรือให้ผู้ส่งเข้ารหัสแบบ 'เปิดสาธารณะ')")
+        # 1) if a Drive client is set up, download AUTHENTICATED first — this is
+        #    what lets us DELETE the file afterwards (one-time decrypt).
+        if drive is not None:
             try:
                 full = drive.download_bytes(drive_id)
-            except Exception as exc:
-                raise RuntimeError(
-                    "เข้าถึงไฟล์บน Google Drive ไม่ได้ — บัญชี Gmail นี้อาจไม่ได้รับ"
-                    f"อนุญาต หรือไฟล์ถูกลบไปแล้ว\nรายละเอียด: {exc}")
+            except Exception:
+                full = None
+        # 2) otherwise (or if that failed) try a PUBLIC download — works with zero
+        #    setup, but an anonymous download cannot delete the file afterwards.
+        if full is None:
+            try:
+                from drive_client import public_download_bytes
+                cand = public_download_bytes(drive_id)
+                _extract_payload_from_bytes(cand, kind)        # validate it's ours
+                full = cand
+            except Exception:
+                full = None
+        if full is None:
+            raise RuntimeError(
+                "เข้าถึงไฟล์บน Google Drive ไม่ได้ — บัญชีนี้อาจไม่ได้รับอนุญาต "
+                "หรือไฟล์ถูกลบไปแล้ว (ไฟล์ Online ถอดได้ครั้งเดียว)")
         inner = _extract_payload_from_bytes(full, kind)
         blob, _ = _resolve_payload(inner, drive)               # inner is offline
         return blob, drive_id

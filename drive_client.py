@@ -144,6 +144,8 @@ class DriveClientOAuth(_DriveBase):
         if creds and not creds.valid and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
+                with open(token_path, "w", encoding="utf-8") as f:
+                    f.write(creds.to_json())        # keep the refreshed token
             except Exception:
                 creds = None
 
@@ -155,7 +157,10 @@ class DriveClientOAuth(_DriveBase):
                 pass
             flow = InstalledAppFlow.from_client_secrets_file(
                 client_secret_json, SCOPES_OAUTH)
-            creds = flow.run_local_server(port=0, prompt="consent")  # browser once
+            # access_type=offline -> a refresh token, so the login is remembered
+            # and auto-renews for every later operation until the user signs out.
+            creds = flow.run_local_server(
+                port=0, access_type="offline", prompt="consent")
             with open(token_path, "w", encoding="utf-8") as f:
                 f.write(creds.to_json())
 

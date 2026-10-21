@@ -41,6 +41,7 @@ except Exception:  # drag & drop is optional
 from vault import VaultStore
 import file_crypto
 import pdf_disguise
+import recipient_crypto
 try:
     import drive_client
     _HAS_DRIVE_LIB = True
@@ -119,6 +120,10 @@ class VaultApp(ctk.CTk):
         self.drive_token_path = str(_APP_DIR / "drive_token.json")
         self.allowed_emails = self.settings.get("allowed_emails") or []   # Online allow-list
         self.online_public = self.settings.get("online_public", True)     # anyone-with-file can decrypt
+        # recipient-key (public-key) mode: encrypt to contacts' public keys so a
+        # recipient decrypts with their own private key and types NO password.
+        self.contacts = self.settings.get("contacts") or []   # [{"name","pk"}]
+        self.send_mode = self.settings.get("send_mode") or "password"  # "password" | "recipient"
         self._drive_client = None            # cached Drive client
 
         # Make Ctrl+A/C/V/X work in every entry regardless of keyboard layout
@@ -325,6 +330,11 @@ class VaultApp(ctk.CTk):
                             command=self._menu_disconnect_drive)
         setmenu.add_command(label="อีเมลที่อนุญาตถอดรหัส Online…   (Allowed emails)",
                             command=self._menu_allowed_emails)
+        setmenu.add_separator()
+        setmenu.add_command(label="กุญแจสาธารณะของฉัน — ส่งให้ผู้อื่น   (My public key)",
+                            command=self._menu_my_public_key)
+        setmenu.add_command(label="รายชื่อผู้รับ (public key) สำหรับ recipient-key…   (Contacts)",
+                            command=self._menu_contacts)
         menubar.add_cascade(label="ตั้งค่า / Settings", menu=setmenu)
 
         self.config(menu=menubar)
@@ -359,6 +369,18 @@ class VaultApp(ctk.CTk):
             fmt_row, values=["Offline", "Online"], command=self._set_net_mode)
         self.net_selector.set(self.net_mode)
         self.net_selector.pack(side="left")
+
+        # How the data key is protected: a shared password, or sealed to a
+        # recipient's public key (recipient decrypts with no password).
+        sec_row = ctk.CTkFrame(self.container, fg_color="transparent")
+        sec_row.pack(fill="x", padx=16, pady=(4, 0))
+        ctk.CTkLabel(sec_row, text="วิธีเข้ารหัส / Encrypt with:").pack(side="left", padx=(2, 8))
+        self.send_selector = ctk.CTkSegmentedButton(
+            sec_row, values=["รหัสผ่าน (password)", "ถึงผู้รับ (recipient-key)"],
+            command=self._set_send_mode)
+        self.send_selector.set("ถึงผู้รับ (recipient-key)" if self.send_mode == "recipient"
+                               else "รหัสผ่าน (password)")
+        self.send_selector.pack(side="left")
 
         # Primary action buttons: encrypt / decrypt files to/from a folder.
         actions = ctk.CTkFrame(self.container, fg_color="transparent")
@@ -698,6 +720,20 @@ class VaultApp(ctk.CTk):
         self.settings["net_mode"] = value
         self._save_settings()
 
+    def _set_send_mode(self, value):
+        self.send_mode = "recipient" if "recipient" in value else "password"
+        self.settings["send_mode"] = self.send_mode
+        self._save_settings()
+        if self.send_mode == "recipient" and not self.contacts:
+            messagebox.showinfo(
+                "โหมดถึงผู้รับ (recipient-key)",
+                "โหมดนี้เข้ารหัส 'ถึงผู้รับเจาะจง' โดยผู้รับไม่ต้องพิมพ์รหัสผ่าน\n\n"
+                "ขั้นตอน:\n"
+                "1) ขอ public key ของผู้รับ (เขากดเมนู 'กุญแจสาธารณะของฉัน' แล้วส่งให้คุณ — "
+                "ส่งผ่าน LINE ได้ ไม่ลับ)\n"
+                "2) เพิ่มที่เมนู ตั้งค่า > รายชื่อผู้รับ (Contacts)\n"
+                "3) เข้ารหัสได้เลย ผู้รับเปิดไฟล์แล้วกดถอดรหัส ระบบใช้ private key ของเขาเอง")
+
     def _menu_allowed_emails(self):
         """Manage (add / remove) the Gmail allow-list for Online decryption."""
         win = ctk.CTkToplevel(self)
@@ -789,6 +825,139 @@ class VaultApp(ctk.CTk):
             win.grab_set()
             win.lift()
             entry.focus()
+        except Exception:
+            pass
+
+    # ---- recipient-key: my key + contacts ----------------------------
+    def _menu_my_public_key(self):
+        """Show this account's public key so the user can send it to a sender.
+        Public keys are NOT secret — safe to share over LINE/chat."""
+        if self.ov is None:
+            messagebox.showwarning("Locked", "กรุณา login ก่อน")
+            return
+        try:
+            pub = self.ov.my_public_key()
+        except Exception as exc:
+            messagebox.showerror("Public key", f"อ่านกุญแจไม่ได้: {exc}")
+            return
+        text = recipient_crypto.encode_public(pub)
+        fp = recipient_crypto.fingerprint(pub)
+
+        win = ctk.CTkToplevel(self)
+        win.title("กุญแจสาธารณะของฉัน (My public key)")
+        win.geometry("560x320")
+        win.configure(fg_color="#141414")
+        ctk.CTkLabel(win, text="กุญแจสาธารณะของฉัน (ส่งให้ผู้ส่งได้เลย — ไม่ลับ)",
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#f2f4f7").pack(pady=(14, 2))
+        ctk.CTkLabel(win, text=f"ลายนิ้วมือ (fingerprint) เพื่อตรวจสอบด้วยตา: {fp}",
+                     text_color="#e6b800").pack(pady=(0, 6))
+        box = ctk.CTkTextbox(win, height=120, wrap="word", fg_color="#1e1e1e",
+                             text_color="#f2f4f7")
+        box.pack(fill="both", expand=True, padx=14, pady=6)
+        box.insert("1.0", text)
+        box.configure(state="normal")
+
+        def copy():
+            try:
+                self.clipboard_clear(); self.clipboard_append(text)
+                btn.configure(text="คัดลอกแล้ว ✓")
+            except Exception:
+                pass
+
+        ctk.CTkLabel(win, text="วิธีใช้: ส่งข้อความนี้ให้ผู้ที่จะเข้ารหัสไฟล์ถึงคุณ "
+                               "เขาจะเพิ่มคุณในรายชื่อผู้รับ แล้วส่งไฟล์มาให้คุณถอดได้โดยไม่ต้องใช้รหัส",
+                     text_color="#8a9099", wraplength=520,
+                     font=ctk.CTkFont(size=11)).pack(padx=14, pady=(0, 4))
+        btn = ctk.CTkButton(win, text="คัดลอกกุญแจ (Copy)", width=180, command=copy)
+        btn.pack(pady=(0, 12))
+        try:
+            win.transient(self); win.grab_set(); win.lift()
+        except Exception:
+            pass
+
+    def _menu_contacts(self):
+        """Manage recipients' public keys for recipient-key encryption."""
+        win = ctk.CTkToplevel(self)
+        win.title("รายชื่อผู้รับ (Contacts)")
+        win.geometry("560x520")
+        win.configure(fg_color="#141414")
+
+        ctk.CTkLabel(win, text="รายชื่อผู้รับสำหรับโหมด recipient-key",
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#f2f4f7").pack(pady=(14, 2))
+        ctk.CTkLabel(win, text="เพิ่ม public key ของผู้รับ แล้วเลือกเข้ารหัสถึงเขาได้โดยไม่ต้องใช้รหัสผ่าน",
+                     text_color="#aab2bd", wraplength=520).pack(pady=(0, 6))
+
+        listframe = ctk.CTkScrollableFrame(win, height=220, fg_color="#171717")
+        listframe.pack(fill="both", expand=True, padx=14, pady=4)
+
+        def save():
+            self.settings["contacts"] = self.contacts
+            self._save_settings()
+
+        def remove(c):
+            if c in self.contacts:
+                self.contacts.remove(c)
+                save(); refresh()
+
+        def refresh():
+            for w in listframe.winfo_children():
+                w.destroy()
+            if not self.contacts:
+                ctk.CTkLabel(listframe, text="(ยังไม่มีผู้รับ)",
+                             text_color="#aab2bd").pack(pady=12)
+                return
+            for c in list(self.contacts):
+                try:
+                    fp = recipient_crypto.fingerprint(recipient_crypto.decode_public(c["pk"]))
+                except Exception:
+                    fp = "??"
+                row = ctk.CTkFrame(listframe, fg_color="#2b2d31", corner_radius=8)
+                row.pack(fill="x", pady=3, padx=2)
+                ctk.CTkLabel(row, text=f"{c.get('name','(ไม่มีชื่อ)')}   [{fp}]",
+                             anchor="w", text_color="#f2f4f7").pack(
+                    side="left", fill="x", expand=True, padx=(10, 8), pady=4)
+                ctk.CTkButton(row, text="ลบ", width=56, fg_color="#a3332f",
+                              hover_color="#7d2420",
+                              command=lambda x=c: remove(x)).pack(side="right",
+                                                                  padx=6, pady=4)
+
+        def add():
+            name = name_entry.get().strip()
+            pk = pk_entry.get("1.0", "end").strip()
+            if not pk:
+                return
+            try:
+                pub = recipient_crypto.decode_public(pk)
+            except ValueError as e:
+                messagebox.showwarning("Public key ไม่ถูกต้อง", str(e), parent=win)
+                return
+            canon = recipient_crypto.encode_public(pub)   # normalize
+            fp = recipient_crypto.fingerprint(pub)
+            if any(x.get("pk") == canon for x in self.contacts):
+                messagebox.showinfo("ซ้ำ", "มีผู้รับคนนี้อยู่แล้ว", parent=win)
+                return
+            self.contacts.append({"name": name or f"ผู้รับ {fp}", "pk": canon})
+            save(); refresh()
+            name_entry.delete(0, "end"); pk_entry.delete("1.0", "end")
+
+        form = ctk.CTkFrame(win, fg_color="transparent")
+        form.pack(fill="x", padx=14, pady=(4, 6))
+        name_entry = ctk.CTkEntry(form, placeholder_text="ชื่อผู้รับ (เช่น คุณเอ)")
+        name_entry.pack(fill="x", pady=(0, 4))
+        pk_entry = ctk.CTkTextbox(form, height=70, wrap="word")
+        pk_entry.pack(fill="x")
+        ctk.CTkLabel(form, text="วาง public key ที่ขึ้นต้นด้วย DOCORGPK1: ที่ผู้รับส่งมา",
+                     text_color="#8a9099", font=ctk.CTkFont(size=11)).pack(
+            anchor="w", pady=(2, 0))
+        ctk.CTkButton(win, text="เพิ่มผู้รับ (Add)", width=160, command=add).pack(pady=(4, 6))
+        ctk.CTkButton(win, text="เสร็จสิ้น", width=120,
+                      command=win.destroy).pack(pady=(0, 12))
+
+        refresh()
+        try:
+            win.transient(self); win.grab_set(); win.lift(); name_entry.focus()
         except Exception:
             pass
 
@@ -1038,6 +1207,56 @@ class VaultApp(ctk.CTk):
         return d
 
     # ---- menu: encrypt files to a folder (originals kept) -------------
+    def _pick_recipients(self):
+        """Modal checkbox dialog to choose which contacts to seal to.
+        Returns a list of public-key bytes, or None if cancelled."""
+        win = ctk.CTkToplevel(self)
+        win.title("เลือกผู้รับ (Select recipients)")
+        win.geometry("460x440")
+        win.configure(fg_color="#141414")
+        ctk.CTkLabel(win, text="เข้ารหัสไฟล์นี้ถึงใคร (ผู้รับถอดได้โดยไม่ต้องใช้รหัส)",
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#f2f4f7").pack(pady=(14, 6))
+        listframe = ctk.CTkScrollableFrame(win, height=260, fg_color="#171717")
+        listframe.pack(fill="both", expand=True, padx=14, pady=4)
+        vars_ = []
+        for c in self.contacts:
+            v = ctk.StringVar(value="on")
+            try:
+                fp = recipient_crypto.fingerprint(recipient_crypto.decode_public(c["pk"]))
+            except Exception:
+                fp = "??"
+            ctk.CTkCheckBox(listframe, text=f"{c.get('name','(ไม่มีชื่อ)')}   [{fp}]",
+                            variable=v, onvalue="on", offvalue="off",
+                            text_color="#f2f4f7").pack(anchor="w", pady=4, padx=6)
+            vars_.append((v, c))
+
+        result = {"pubs": None}
+
+        def confirm():
+            pubs = []
+            for v, c in vars_:
+                if v.get() == "on":
+                    try:
+                        pubs.append(recipient_crypto.decode_public(c["pk"]))
+                    except Exception:
+                        pass
+            result["pubs"] = pubs
+            win.destroy()
+
+        btns = ctk.CTkFrame(win, fg_color="transparent")
+        btns.pack(fill="x", padx=14, pady=(4, 12))
+        ctk.CTkButton(btns, text="ยกเลิก", width=120, fg_color="gray30",
+                      command=win.destroy).pack(side="left")
+        ctk.CTkButton(btns, text="เข้ารหัส", width=160,
+                      command=confirm).pack(side="right")
+        try:
+            win.transient(self); win.grab_set(); win.lift()
+            self.wait_window(win)
+        except Exception:
+            pass
+        return result["pubs"]
+
     def _menu_encrypt(self):
         if not self.password:
             messagebox.showwarning("Locked", "Please log in first.")
@@ -1063,6 +1282,23 @@ class VaultApp(ctk.CTk):
                 "ไปที่ ตั้งค่า > ตั้งค่า Google Drive — บัญชีส่วนตัว (OAuth) (หรือเลือก Offline)")
             return
 
+        # recipient-key mode: pick which contacts to seal to (no password needed
+        # by the recipient). Done on the main thread BEFORE the worker starts.
+        recipients = None
+        if self.send_mode == "recipient":
+            if not self.contacts:
+                messagebox.showwarning(
+                    "ยังไม่มีผู้รับ",
+                    "โหมด 'ถึงผู้รับ (recipient-key)' ต้องเพิ่ม public key ของผู้รับก่อน\n"
+                    "ไปที่ ตั้งค่า > รายชื่อผู้รับ (Contacts) — หรือสลับกลับเป็นโหมดรหัสผ่าน")
+                return
+            recipients = self._pick_recipients()
+            if recipients is None:        # cancelled
+                return
+            if not recipients:
+                messagebox.showwarning("เลือกผู้รับ", "กรุณาเลือกผู้รับอย่างน้อย 1 คน")
+                return
+
         self.dash_status.configure(
             text=("กำลังอัปโหลดขึ้น Google Drive…" if online else "กำลังเข้ารหัส…"))
         pw = self.password
@@ -1083,7 +1319,7 @@ class VaultApp(ctk.CTk):
                 try:
                     done.append(encrypt(s, out_dir, pw, online=online, drive=drive,
                                         allowed_emails=emails, public=public,
-                                        setup=setup))
+                                        setup=setup, recipients=recipients))
                 except Exception as exc:
                     failed.append(f"{Path(s).name}: {exc}")
             return done, failed
@@ -1149,6 +1385,11 @@ class VaultApp(ctk.CTk):
 
         self.dash_status.configure(text="กำลังถอดรหัส… / decrypting…")
         pw, encs = self.password, list(encs)
+        # our private key unlocks recipient-key files sent TO us (no password).
+        try:
+            priv = self.ov.identity()[0]
+        except Exception:
+            priv = None
 
         def work():
             # auto-configure from any bundled setup so this machine can receive
@@ -1166,9 +1407,11 @@ class VaultApp(ctk.CTk):
                     low = str(e).lower()
                     # detect by content/extension: disguise JPG, disguise PDF, else .enc
                     if low.endswith((".jpg", ".jpeg")) or pdf_disguise.is_disguise_jpg(e):
-                        done.append(pdf_disguise.decrypt_jpg_to_folder(e, out_dir, pw, drive=drive))
+                        done.append(pdf_disguise.decrypt_jpg_to_folder(
+                            e, out_dir, pw, drive=drive, private_key=priv))
                     elif low.endswith(".pdf") or pdf_disguise.is_disguise_pdf(e):
-                        done.append(pdf_disguise.decrypt_pdf_to_folder(e, out_dir, pw, drive=drive))
+                        done.append(pdf_disguise.decrypt_pdf_to_folder(
+                            e, out_dir, pw, drive=drive, private_key=priv))
                     else:
                         done.append(file_crypto.decrypt_file_to_folder(e, out_dir, pw))
                 except Exception as exc:

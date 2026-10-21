@@ -90,6 +90,15 @@ class OpenVault:
         seed = self.store.recovery_seed(self.vault_id)
         return split_secret(self.dk, k, n, seed=seed)
 
+    # Recipient-key identity (public-key / "sealed box" mode) -----------
+    def identity(self) -> tuple[bytes, bytes]:
+        """This vault's (private_raw, public_raw) X25519 keypair, created and
+        stored (encrypted in the index) on first use."""
+        return self.store.get_identity(self)
+
+    def my_public_key(self) -> bytes:
+        return self.identity()[1]
+
 
 # --- the store --------------------------------------------------------------
 
@@ -211,6 +220,22 @@ class VaultStore:
     def _load_index(self, ov: OpenVault) -> dict:
         blob = self._index_path(ov.vault_id).read_text("utf-8")
         return json.loads(_open(ov.dk, blob).decode("utf-8"))
+
+    # ---- recipient-key identity --------------------------------------
+    def get_identity(self, ov: OpenVault) -> tuple[bytes, bytes]:
+        """Return (private_raw, public_raw) for this vault, creating the keypair
+        on first use and storing it inside the ENCRYPTED index (so the private
+        key is protected by the DK / login, never written in the clear)."""
+        from recipient_crypto import generate_keypair, public_from_private
+        index = self._load_index(ov)
+        ident = index.get("_identity")
+        if ident and ident.get("priv"):
+            priv = bytes.fromhex(ident["priv"])
+            return priv, public_from_private(priv)
+        priv, pub = generate_keypair()
+        index["_identity"] = {"priv": priv.hex(), "pub": pub.hex()}
+        self._save_index(ov, index)
+        return priv, pub
 
     # ---- file operations ---------------------------------------------
     def add_file(self, ov: OpenVault, path: str | os.PathLike) -> str:

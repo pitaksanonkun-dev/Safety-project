@@ -22,6 +22,7 @@ from pathlib import Path
 import fitz  # PyMuPDF
 
 import file_crypto
+import recipient_crypto
 import verse_card
 import qr_pointer
 
@@ -152,11 +153,16 @@ def _resolve_payload(payload: bytes, drive) -> tuple[bytes, str | None]:
 
 
 def _encrypt_file(src, out_dir, password, online, drive, kind: str,
-                  allowed_emails=None, public=False, setup=None) -> Path:
+                  allowed_emails=None, public=False, setup=None,
+                  recipients=None) -> Path:
     """Shared encrypt path for kind in {'pdf','jpg'}.
     Offline: the disguise file holds the full data.
     Online: the FULL disguise PDF/JPG is uploaded to Drive; the LOCAL file is a
-    small pointer PDF/JPG of the same kind that redirects to it."""
+    small pointer PDF/JPG of the same kind that redirects to it.
+
+    `recipients` (list of X25519 public-key bytes): if given, the data key is
+    sealed to those recipients instead of derived from `password` — the recipient
+    decrypts with their own private key and types no password."""
     src = Path(src)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -165,7 +171,10 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str,
     suffix = "." + kind
     mime = "image/jpeg" if kind == "jpg" else "application/pdf"
 
-    blob = file_crypto.make_blob(src.read_bytes(), src.name, password)
+    if recipients:
+        blob = recipient_crypto.make_sealed_blob(src.read_bytes(), src.name, recipients)
+    else:
+        blob = file_crypto.make_blob(src.read_bytes(), src.name, password)
     offline_payload = bytes([MODE_OFFLINE]) + blob
 
     if not online:
@@ -209,22 +218,24 @@ def _encrypt_file(src, out_dir, password, online, drive, kind: str,
 
 def encrypt_file_to_pdf(src: str | Path, out_dir: str | Path, password: str,
                         online: bool = False, drive=None, allowed_emails=None,
-                        public=False, setup=None) -> Path:
+                        public=False, setup=None, recipients=None) -> Path:
     """Encrypt `src` to a disguise PDF. Online: upload a full PDF to Drive, either
     public (anyone with the file can decrypt) or shared only with allowed_emails.
-    `setup` (OAuth client + allow-list) is bundled so a recipient self-configures."""
+    `setup` (OAuth client + allow-list) is bundled so a recipient self-configures.
+    `recipients`: seal to these public keys (recipient decrypts with no password)."""
     return _encrypt_file(src, out_dir, password, online, drive, "pdf",
-                         allowed_emails, public, setup)
+                         allowed_emails, public, setup, recipients)
 
 
 def encrypt_file_to_jpg(src: str | Path, out_dir: str | Path, password: str,
                         online: bool = False, drive=None, allowed_emails=None,
-                        public=False, setup=None, zoom: float = 3.0) -> Path:
+                        public=False, setup=None, recipients=None, zoom: float = 3.0) -> Path:
     """Encrypt `src` to a disguise JPG. Online: upload a full JPG to Drive, either
     public (anyone with the file can decrypt) or shared only with allowed_emails.
-    `setup` (OAuth client + allow-list) is bundled so a recipient self-configures."""
+    `setup` (OAuth client + allow-list) is bundled so a recipient self-configures.
+    `recipients`: seal to these public keys (recipient decrypts with no password)."""
     return _encrypt_file(src, out_dir, password, online, drive, "jpg",
-                         allowed_emails, public, setup)
+                         allowed_emails, public, setup, recipients)
 
 
 def _payload_from_file(path) -> bytes | None:
@@ -276,6 +287,19 @@ def _online_pointer_payload(drive_id: str, kind: str) -> bytes:
         {"v": 1, "drive_id": drive_id, "kind": kind}).encode("utf-8")
 
 
+def _open_blob(blob: bytes, password=None, private_key=None) -> tuple[str, bytes]:
+    """Restore (original_name, data) from an inner container, picking the mode by
+    its MAGIC: a recipient-sealed blob needs our private_key (no password); a
+    password container needs the password."""
+    if recipient_crypto.is_sealed_blob(blob):
+        if private_key is None:
+            raise ValueError(
+                "ไฟล์นี้เข้ารหัสแบบ recipient-key — ต้อง login เข้าโปรแกรมด้วยบัญชี "
+                "ที่เป็นผู้รับ เพื่อใช้ private key ถอด (ไม่ต้องใช้รหัสผ่านของผู้ส่ง)")
+        return recipient_crypto.read_sealed_blob(blob, private_key)
+    return file_crypto.read_blob(blob, password)
+
+
 def _maybe_delete(drive_id, drive) -> None:
     """Delete the online Drive file after a successful decrypt (owner only;
     a recipient with a different Gmail simply can't, which is fine)."""
@@ -287,10 +311,11 @@ def _maybe_delete(drive_id, drive) -> None:
 
 
 def decrypt_jpg_to_folder(jpg_path: str | Path, out_dir: str | Path,
-                          password: str, drive=None) -> Path:
+                          password: str = None, drive=None, private_key=None) -> Path:
     """Restore the original file from a disguise JPG. Reads the appended pointer,
     or — if a chat app stripped it — the QR stamped on the image. Online files
-    are downloaded from Drive and then deleted there."""
+    are downloaded from Drive and then deleted there. A recipient-sealed file is
+    opened with `private_key` (no password); a password file with `password`."""
     data = Path(jpg_path).read_bytes()
     if len(data) >= JPG_TRAILER_LEN and data[-JPG_TRAILER_LEN:-8] == JPG_MARKER:
         n = int.from_bytes(data[-8:], "big")
@@ -304,7 +329,7 @@ def decrypt_jpg_to_folder(jpg_path: str | Path, out_dir: str | Path,
     blob, used_drive_id = _resolve_payload(payload, drive)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    original_name, content = file_crypto.read_blob(blob, password)
+    original_name, content = _open_blob(blob, password, private_key)
     out_path = file_crypto._unique_path(out_dir / original_name)
     out_path.write_bytes(content)
     _maybe_delete(used_drive_id, drive)
@@ -324,9 +349,10 @@ def is_disguise_pdf(path: str | Path) -> bool:
 
 
 def decrypt_pdf_to_folder(pdf_path: str | Path, out_dir: str | Path,
-                          password: str, drive=None) -> Path:
+                          password: str = None, drive=None, private_key=None) -> Path:
     """Extract the payload from the disguise PDF and restore the file
-    (downloading from Drive first if it is an online pointer)."""
+    (downloading from Drive first if it is an online pointer). A recipient-sealed
+    file is opened with `private_key` (no password); a password file with `password`."""
     doc = fitz.open(str(pdf_path))
     try:
         if PAYLOAD_NAME in doc.embfile_names():
@@ -344,7 +370,7 @@ def decrypt_pdf_to_folder(pdf_path: str | Path, out_dir: str | Path,
     blob, used_drive_id = _resolve_payload(payload, drive)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    original_name, data = file_crypto.read_blob(blob, password)
+    original_name, data = _open_blob(blob, password, private_key)
     out_path = file_crypto._unique_path(out_dir / original_name)
     out_path.write_bytes(data)
     _maybe_delete(used_drive_id, drive)

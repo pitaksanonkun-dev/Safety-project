@@ -75,17 +75,41 @@ class _DriveBase:
             body={"type": "user", "role": role, "emailAddress": email},
             sendNotificationEmail=False, supportsAllDrives=True).execute()
 
-    def delete_file(self, file_id: str) -> None:
-        """Remove a file after a one-time decrypt. The owner deletes it
-        permanently; a non-owner recipient (shared as writer) can't delete but
-        CAN trash it — either way it can no longer be downloaded/decrypted."""
+    def delete_file(self, file_id: str) -> bool:
+        """Make an online file unusable after a one-time decrypt. Returns True if
+        the data is gone.
+
+        Google Drive reality: only the OWNER can delete or trash a My Drive file.
+        A non-owner recipient (shared as writer) can do NEITHER — but a writer CAN
+        overwrite the file's CONTENT. So if we can't delete, we destroy the
+        encrypted payload by overwriting it with one harmless byte: the file
+        object may linger (empty) until the owner removes it, but it can never be
+        decrypted again. That is what 'one-time decrypt' actually needs."""
+        # 1) owner path — delete permanently
         try:
             self.service.files().delete(
                 fileId=file_id, supportsAllDrives=True).execute()
+            return True
         except Exception:
+            pass
+        # 2) non-owner path — neutralize the content so re-decrypt is impossible
+        try:
+            media = MediaInMemoryUpload(b"\x00", mimetype="application/octet-stream",
+                                        resumable=False)
+            self.service.files().update(
+                fileId=file_id, media_body=media,
+                supportsAllDrives=True).execute()
+            return True
+        except Exception:
+            pass
+        # 3) last resort — try to trash it (works only if we happen to be owner)
+        try:
             self.service.files().update(
                 fileId=file_id, body={"trashed": True},
                 supportsAllDrives=True).execute()
+            return True
+        except Exception:
+            return False
 
     def check(self) -> str:
         about = self.service.about().get(fields="user(emailAddress)").execute()

@@ -1000,11 +1000,16 @@ class VaultApp(ctk.CTk):
                 "public": self.online_public}
 
     def _install_setup(self, setup):
-        """Auto-apply a bundled setup from a received file: write the OAuth client
-        locally (if this machine has none) and inherit the allow-list / mode."""
+        """Auto-apply a bundled setup from a received file so a brand-new receiver
+        can self-configure. CRITICAL: if THIS machine already has its own Google
+        Drive set up, do NOTHING — a received file must never silently change your
+        Drive account, or your own uploads would start landing in the sender's
+        Drive. It only helps a machine that has no Drive of its own yet."""
+        if self._drive_configured():
+            return                       # keep the user's own account untouched
         try:
             cs = setup.get("client_secret")
-            if cs and not self._drive_configured():
+            if cs:
                 path = str(_APP_DIR / "drive_client_secret.json")
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(cs, f)
@@ -1012,8 +1017,8 @@ class VaultApp(ctk.CTk):
                 self.drive_oauth_client = path
                 self.settings["drive_method"] = "oauth"
                 self.settings["drive_oauth_client"] = path
-                # a copied token (if any) belongs to the sender — drop it so this
-                # machine signs in as ITS OWN Google account
+                # any copied token belongs to the sender — drop it so this machine
+                # signs in as ITS OWN Google account
                 self._forget_drive_login()
             em = setup.get("allowed_emails")
             if em is not None:
@@ -1359,6 +1364,14 @@ class VaultApp(ctk.CTk):
             if not recipients:
                 messagebox.showwarning("เลือกผู้รับ", "กรุณาเลือกผู้รับอย่างน้อย 1 คน")
                 return
+            # Always seal to OURSELVES too, so we can decrypt our own sent files
+            # on this machine (like keeping a readable copy in "sent items").
+            try:
+                mypub = self.ov.my_public_key()
+                if not any(bytes(p) == bytes(mypub) for p in recipients):
+                    recipients.append(mypub)
+            except Exception:
+                pass
 
         self.dash_status.configure(
             text=("กำลังอัปโหลดขึ้น Google Drive…" if online else "กำลังเข้ารหัส…"))
@@ -1372,9 +1385,10 @@ class VaultApp(ctk.CTk):
 
         def work():
             drive = None
+            acct = None
             if online:
                 drive = self._get_drive()   # built here (may open browser once)
-                drive.check()               # verify reachable before sending
+                acct = drive.check()        # verify reachable + which account
             done, failed = [], []
             for s in srcs:
                 try:
@@ -1383,7 +1397,7 @@ class VaultApp(ctk.CTk):
                                         setup=setup, recipients=recipients))
                 except Exception as exc:
                     failed.append(f"{Path(s).name}: {exc}")
-            return done, failed
+            return done, failed, acct
 
         def after(res, err):
             if err is not None:
@@ -1398,23 +1412,28 @@ class VaultApp(ctk.CTk):
                     self.dash_status.configure(text="เข้ารหัสล้มเหลว")
                     messagebox.showerror("Encrypt failed", str(err))
                 return
-            self._encrypt_done(res[0], res[1], out_dir)
+            self._encrypt_done(res[0], res[1], out_dir, res[2] if len(res) > 2 else None)
 
         self._run_bg(work, after)
 
-    def _encrypt_done(self, done, failed, out_dir):
+    def _encrypt_done(self, done, failed, out_dir, account=None):
         self._clear_pending()     # dropped files have been handled
         fmt = self.out_format
         online = (self.net_mode == "Online")
-        mode_txt = ("Online — ข้อมูลถูกอัปโหลดขึ้น Google Drive, ไฟล์ "
-                    f"{fmt} นี้มีเพียงลิงก์ที่ซ่อนไว้ (เล็ก)") if online else \
+        acct_line = (f" (บัญชี {account})" if online and account else "")
+        mode_txt = ("Online — ข้อมูลถูกอัปโหลดขึ้น Google Drive" + acct_line +
+                    f", ไฟล์ {fmt} นี้มีเพียงลิงก์ที่ซ่อนไว้ (เล็ก)") if online else \
                    f"Offline — ข้อมูลฝังอยู่ในไฟล์ {fmt} (ขนาดจริง)"
         self.dash_status.configure(
             text=f"✓ เข้ารหัสแล้ว {len(done)} ไฟล์ [{self.net_mode}]")
+        acct_warn = (f"\n\n⚠️ อัปโหลดไปบัญชี Google Drive: {account}\n"
+                     f"ถ้าไม่ใช่บัญชีของคุณ ให้ไปที่ ตั้งค่า > ออกจากระบบ/สลับบัญชี "
+                     f"Google Drive แล้วเชื่อมต่อใหม่") if (online and account) else ""
         msg = (f"เข้ารหัส {len(done)} ไฟล์ เป็นไฟล์ {fmt} (ดูเหมือนข้อพระคัมภีร์)\n"
                f"โหมด: {mode_txt}\n\nบันทึกไว้ที่:\n{out_dir}\n\n"
                f"ไฟล์ต้นฉบับไม่ถูกลบ ยังใช้งานได้ตามปกติ\n"
-               f"นำไฟล์ {fmt} เหล่านี้กลับมากด 'ถอดรหัสไฟล์' เพื่อได้ไฟล์เดิมคืน")
+               f"นำไฟล์ {fmt} เหล่านี้กลับมากด 'ถอดรหัสไฟล์' เพื่อได้ไฟล์เดิมคืน"
+               + acct_warn)
         if failed:
             msg += "\n\nทำไม่สำเร็จ:\n" + "\n".join(failed)
             messagebox.showwarning(f"Encrypted to {fmt}", msg)

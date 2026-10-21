@@ -40,6 +40,11 @@ Document Organizer (portable) */
 # manual backup made by make_manual.py (original is already in git history)
 *_backup.pdf
 
+# PRIVATE: hidden-channel guide + its generator — never push to a public repo
+คู่มือช่องทางลับ*.pdf
+*SECRET*.pdf
+make_secret_manual.py
+
 # Test / scratch artifacts
 _t/
 sbx_store/

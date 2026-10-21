@@ -9,8 +9,8 @@ echo.
 echo Ensuring dependencies are installed...
 python -m pip install -r requirements.txt -q
 echo.
-echo Starting Document Organizer...
-python gui.py
+echo Starting Health ^& Wellness...
+python health_gate.py
 echo.
 echo ---- program exited (code %errorlevel%) ----
 pause

@@ -37,8 +37,15 @@ for pkg in [
     except Exception as exc:          # a missing optional package is not fatal
         print(f"[build_exe] skip {pkg}: {exc}")
 
+# The .exe front door is the Health & Wellness cover app; it imports gui (the
+# real vault) lazily, so make sure every local module is bundled.
+hiddenimports += ["gui", "verse_card", "pdf_disguise", "drive_client",
+                  "recipient_crypto", "file_crypto", "crypto_vault",
+                  "secret_sharing", "vault", "qr_pointer", "make_portable",
+                  "app_paths"]
+
 a = Analysis(
-    ["gui.py"],
+    ["health_gate.py"],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -58,7 +65,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="Document Organizer",
+    name="Health & Wellness",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

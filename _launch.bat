@@ -10,4 +10,6 @@ cd /d "%~dp0"
 python -c "import customtkinter, tkinterdnd2, fitz, cv2, qrcode, pythainlp, google.oauth2, google_auth_oauthlib, argon2, cryptography, PIL" 1>nul 2>nul
 if errorlevel 1 python -m pip install -r requirements.txt
 
-python gui.py
+REM Front door is the Health & Wellness cover app; the vault opens only via the
+REM hidden side-channel inside it.
+python health_gate.py

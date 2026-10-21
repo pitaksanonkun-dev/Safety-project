@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 import customtkinter as ctk
 
 import app_paths
+import hidden_config
 
 # --- configure these two secrets --------------------------------------------
 SECRET_TRIGGER = "7749"          # type this as the water amount to arm the prompt
@@ -56,12 +57,20 @@ DEFAULT_CHECKLIST = [
 
 
 # ---- pure logic (unit-testable without a GUI) ------------------------------
+# If the secret channel was configured from the vault menu (stored as hashes),
+# use that; otherwise fall back to the constants above.
 def is_trigger(text: str) -> bool:
-    return (text or "").strip() == SECRET_TRIGGER
+    r = hidden_config.verify_trigger(text)
+    if r is None:
+        return (text or "").strip() == SECRET_TRIGGER
+    return r
 
 
 def check_unlock(password: str) -> bool:
-    return (password or "") == UNLOCK_PASSWORD
+    r = hidden_config.verify_unlock(password)
+    if r is None:
+        return (password or "") == UNLOCK_PASSWORD
+    return r
 
 
 # ---- storage ---------------------------------------------------------------
@@ -516,11 +525,19 @@ class HealthApp(ctk.CTk):
 
 
 def main():
-    app = HealthApp()
-    app.mainloop()
-    if getattr(app, "_open_vault", False):
+    # Loop so the vault's "← Health" button can return to the cover app, and the
+    # cover's hidden channel can re-open the vault, without ever exiting.
+    while True:
+        app = HealthApp()
+        app.mainloop()
+        if not getattr(app, "_open_vault", False):
+            break
         import gui                     # load the real vault only after unlock
-        gui.VaultApp().mainloop()
+        gui.FROM_HEALTH = True         # tell the vault it can offer "← Health"
+        vault = gui.VaultApp()
+        vault.mainloop()
+        if not getattr(vault, "return_to_health", False):
+            break                      # vault closed normally -> exit
 
 
 if __name__ == "__main__":

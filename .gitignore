@@ -4,6 +4,8 @@
 vault_store/
 vault_store_OLD_backup_*/
 app_settings.json
+app_prefs.json
+health_data.json
 error.log
 
 # Recovery key files, if ever saved inside the project

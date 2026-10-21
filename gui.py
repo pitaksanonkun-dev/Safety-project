@@ -44,6 +44,11 @@ import file_crypto
 import pdf_disguise
 import recipient_crypto
 import make_portable
+import hidden_config
+
+# Set True by the health cover app before launching the vault, so the vault can
+# offer a "← Health" button that returns to the cover instead of exiting.
+FROM_HEALTH = False
 try:
     import drive_client
     _HAS_DRIVE_LIB = True
@@ -108,6 +113,7 @@ class VaultApp(ctk.CTk):
         self.store = VaultStore(STORE_DIR)
         self.store.init()
         self.ov = None            # OpenVault once unlocked
+        self.return_to_health = False  # set by the "← Health" button
         self.password = None      # kept in memory for file encrypt/decrypt
         self.pending_files = []   # files dropped, waiting to be encrypted
 
@@ -339,6 +345,8 @@ class VaultApp(ctk.CTk):
         setmenu.add_command(label="รายชื่อผู้รับ (public key) สำหรับ recipient-key…   (Contacts)",
                             command=self._menu_contacts)
         setmenu.add_separator()
+        setmenu.add_command(label="ตั้งรหัสช่องทางลับ (แอป Health)…   (Set hidden-channel password)",
+                            command=self._menu_set_health_secret)
         setmenu.add_command(label="สร้างชุดแจกจ่ายสำหรับเครื่องอื่น…   (Export portable copy)",
                             command=self._menu_export_portable)
         menubar.add_cascade(label="ตั้งค่า / Settings", menu=setmenu)
@@ -355,6 +363,9 @@ class VaultApp(ctk.CTk):
                      ).pack(side="left", padx=8)
         ctk.CTkButton(top, text="Lock", width=80, fg_color="gray30",
                       command=self.show_login).pack(side="right", padx=4)
+        if FROM_HEALTH:
+            ctk.CTkButton(top, text="← Health", width=90, fg_color="gray30",
+                          command=self._return_to_health).pack(side="right", padx=4)
         ctk.CTkButton(top, text="Backup key…", width=110, fg_color="gray30",
                       command=self._export_shares).pack(side="right", padx=4)
         ctk.CTkButton(top, text="Add files…", width=110,
@@ -1203,6 +1214,57 @@ class VaultApp(ctk.CTk):
                  else ["xdg-open", str(path)]))
         except Exception as exc:
             messagebox.showerror("Open folder", f"เปิดโฟลเดอร์ไม่ได้:\n{exc}")
+
+    def _return_to_health(self):
+        """Close the vault and return to the Health cover app (main() reopens it)."""
+        self.return_to_health = True
+        self.ov = None
+        self.password = None
+        self.destroy()
+
+    def _menu_set_health_secret(self):
+        """Set the cover app's hidden-channel trigger + unlock password from here,
+        so the user never edits source files. Stored as salted hashes."""
+        win = ctk.CTkToplevel(self)
+        win.title("ตั้งรหัสช่องทางลับ (Health)")
+        win.geometry("460x330")
+        win.configure(fg_color="#141414")
+        ctk.CTkLabel(win, text="ตั้งรหัสช่องทางลับของแอป Health",
+                     font=ctk.CTkFont(size=15, weight="bold"),
+                     text_color="#f2f4f7").pack(pady=(16, 2))
+        ctk.CTkLabel(win, text="ใช้เปิด vault จากแท็บ 'ดื่มน้ำ' ในแอป Health โดยไม่ต้องแก้ไฟล์",
+                     text_color="#aab2bd", wraplength=410).pack(pady=(0, 10))
+
+        ctk.CTkLabel(win, text="ค่าที่พิมพ์ในช่อง ml เพื่อเรียกหน้ายืนยัน (trigger)",
+                     text_color="#d7dbe0", anchor="w").pack(fill="x", padx=24)
+        e_trig = ctk.CTkEntry(win, width=380, placeholder_text="เช่น 7749 หรือข้อความ")
+        e_trig.pack(pady=(2, 10))
+        ctk.CTkLabel(win, text="รหัสผ่านที่ใส่ในหน้ายืนยันเพื่อเปิด vault (unlock)",
+                     text_color="#d7dbe0", anchor="w").pack(fill="x", padx=24)
+        e_pw = ctk.CTkEntry(win, width=380, show="•", placeholder_text="รหัสเปิด vault")
+        e_pw.pack(pady=(2, 6))
+
+        status = ctk.CTkLabel(win, text="", text_color="#e6b800")
+        status.pack()
+        if hidden_config.is_configured():
+            status.configure(text="สถานะ: ตั้งค่าไว้แล้ว (ใส่ใหม่เพื่อเปลี่ยน)",
+                             text_color="#4caf69")
+
+        def save():
+            trig, pw = e_trig.get().strip(), e_pw.get()
+            if not trig or not pw:
+                status.configure(text="กรุณากรอกทั้งสองช่อง", text_color="#e6b800")
+                return
+            hidden_config.set_secret_channel(trig, pw)
+            status.configure(text="บันทึกแล้ว ✓ (มีผลทันทีกับแอป Health)",
+                             text_color="#4caf69")
+            win.after(900, win.destroy)
+
+        ctk.CTkButton(win, text="บันทึกรหัสลับ", width=180, command=save).pack(pady=12)
+        try:
+            win.transient(self); win.grab_set(); win.lift(); e_trig.focus()
+        except Exception:
+            pass
 
     def _menu_export_portable(self):
         """Pick a destination folder, then immediately produce a clean, shareable

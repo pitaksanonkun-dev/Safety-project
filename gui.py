@@ -45,6 +45,7 @@ import pdf_disguise
 import recipient_crypto
 import make_portable
 import hidden_config
+import pubkey_image
 
 # Set True by the health cover app before launching the vault, so the vault can
 # offer a "← Health" button that returns to the cover instead of exiting.
@@ -882,12 +883,34 @@ class VaultApp(ctk.CTk):
             except Exception:
                 pass
 
-        ctk.CTkLabel(win, text="วิธีใช้: ส่งข้อความนี้ให้ผู้ที่จะเข้ารหัสไฟล์ถึงคุณ "
+        def export_file():
+            path = filedialog.asksaveasfilename(
+                title="ส่งออกกุญแจเป็นไฟล์ PNG (การ์ดข้อพระคัมภีร์)",
+                defaultextension=".png", initialfile="ข้อพระคัมภีร์ประจำวัน.png",
+                filetypes=[("PNG image", "*.png")])
+            if not path:
+                return
+            try:
+                out, got_fp = pubkey_image.export_png(pub, path)
+            except Exception as exc:
+                messagebox.showerror("ส่งออกไม่สำเร็จ", str(exc), parent=win)
+                return
+            self._show_success(
+                "ส่งออกกุญแจสำเร็จ",
+                f"ส่งออก Key: {got_fp}\n\nไฟล์:\n{out}\n\n"
+                f"ไฟล์นี้ดูเหมือนการ์ดข้อพระคัมภีร์ (มีข้อสุ่ม 1 ข้อ) แต่มี public key "
+                f"ของคุณฝังอยู่ ส่งให้ผู้อื่นแล้วให้เขากด 'นำเข้าจากไฟล์' ในเมนูรายชื่อผู้รับ")
+
+        ctk.CTkLabel(win, text="วิธีใช้: ส่งข้อความนี้ (หรือส่งออกเป็นไฟล์ PNG) ให้ผู้ที่จะเข้ารหัสไฟล์ถึงคุณ "
                                "เขาจะเพิ่มคุณในรายชื่อผู้รับ แล้วส่งไฟล์มาให้คุณถอดได้โดยไม่ต้องใช้รหัส",
                      text_color="#8a9099", wraplength=520,
                      font=ctk.CTkFont(size=11)).pack(padx=14, pady=(0, 4))
-        btn = ctk.CTkButton(win, text="คัดลอกกุญแจ (Copy)", width=180, command=copy)
-        btn.pack(pady=(0, 12))
+        btnrow = ctk.CTkFrame(win, fg_color="transparent")
+        btnrow.pack(pady=(0, 12))
+        btn = ctk.CTkButton(btnrow, text="คัดลอกกุญแจ (Copy)", width=180, command=copy)
+        btn.pack(side="left", padx=5)
+        ctk.CTkButton(btnrow, text="ส่งออกเป็นไฟล์ (PNG)", width=180, fg_color="#2d7d46",
+                      hover_color="#236138", command=export_file).pack(side="left", padx=5)
         try:
             win.transient(self); win.grab_set(); win.lift()
         except Exception:
@@ -968,7 +991,41 @@ class VaultApp(ctk.CTk):
         ctk.CTkLabel(form, text="วาง public key ที่ขึ้นต้นด้วย DOCORGPK1: ที่ผู้รับส่งมา",
                      text_color="#8a9099", font=ctk.CTkFont(size=11)).pack(
             anchor="w", pady=(2, 0))
-        ctk.CTkButton(win, text="เพิ่มผู้รับ (Add)", width=160, command=add).pack(pady=(4, 6))
+
+        def import_file():
+            path = filedialog.askopenfilename(
+                title="เลือกไฟล์กุญแจ (PNG การ์ดข้อพระคัมภีร์)",
+                filetypes=[("รูปภาพ PNG/JPG", "*.png *.jpg *.jpeg"), ("All files", "*.*")])
+            if not path:
+                return
+            try:
+                pub = pubkey_image.read_png(path)
+            except Exception as exc:
+                messagebox.showwarning("นำเข้าไม่สำเร็จ", str(exc), parent=win)
+                return
+            canon = recipient_crypto.encode_public(pub)
+            fp = recipient_crypto.fingerprint(pub)
+            if any(x.get("pk") == canon for x in self.contacts):
+                messagebox.showinfo("ซ้ำ", f"มีผู้รับคีย์นี้อยู่แล้ว (Key: {fp})", parent=win)
+                return
+            dlg = ctk.CTkInputDialog(
+                title="นำเข้าผู้รับ",
+                text=f"พบ Key: {fp}\nกรอกชื่อผู้รับที่ต้องการบันทึก:")
+            name = dlg.get_input()
+            if name is None:           # cancelled
+                return
+            name = name.strip() or f"ผู้รับ {fp}"
+            self.contacts.append({"name": name, "pk": canon})
+            save(); refresh()
+            messagebox.showinfo("นำเข้าสำเร็จ",
+                                f"นำเข้าผู้รับ '{name}' แล้ว\nKey: {fp}", parent=win)
+
+        btns = ctk.CTkFrame(win, fg_color="transparent")
+        btns.pack(pady=(4, 6))
+        ctk.CTkButton(btns, text="เพิ่มผู้รับ (Add)", width=160, command=add).pack(
+            side="left", padx=5)
+        ctk.CTkButton(btns, text="นำเข้าจากไฟล์ (PNG)", width=170, fg_color="#2d7d46",
+                      hover_color="#236138", command=import_file).pack(side="left", padx=5)
         ctk.CTkButton(win, text="เสร็จสิ้น", width=120,
                       command=win.destroy).pack(pady=(0, 12))
 

@@ -52,8 +52,8 @@ def make_qr_image(data: str, px: int = 300,
     return img.resize((px, px), Image.NEAREST)
 
 
-def read_pointer_from_image_bytes(img_bytes: bytes):
-    """Scan an image (PNG/JPG bytes) for our pointer QR; return (drive_id, kind) or None."""
+def read_text_from_image_bytes(img_bytes: bytes):
+    """Scan an image (PNG/JPG bytes) for ANY QR code; return its text or None."""
     arr = np.frombuffer(img_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -67,10 +67,14 @@ def read_pointer_from_image_bytes(img_bytes: bytes):
             data, _pts, _ = detector.detectAndDecode(probe)
         except cv2.error:
             data = ""
-        ptr = decode_pointer(data)
-        if ptr:
-            return ptr
+        if data:
+            return data
     return None
+
+
+def read_pointer_from_image_bytes(img_bytes: bytes):
+    """Scan an image (PNG/JPG bytes) for our pointer QR; return (drive_id, kind) or None."""
+    return decode_pointer(read_text_from_image_bytes(img_bytes) or "")
 
 
 if __name__ == "__main__":

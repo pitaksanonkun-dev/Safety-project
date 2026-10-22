@@ -468,12 +468,12 @@ class HealthApp(ctk.CTk):
     def _log_water(self):
         text = self.water_entry.get().strip()
         self.water_entry.delete(0, "end")
-        if is_trigger(text):               # correct trigger typed
-            # ...but the channel arms ONLY when sound is off AND theme is dark.
-            # Without that combination, silently ignore (deniable — looks like
-            # nothing happened, and the trigger value is not logged as water).
-            if self._conditions_met():
-                self._armed_dialog()
+        # The hidden channel arms ONLY when the trigger is typed AND the pre-
+        # conditions hold (sound off + dark theme). In every other case — wrong
+        # value, OR the trigger without the conditions — fall through and log the
+        # entry like any ordinary value, so nothing stands out.
+        if is_trigger(text) and self._conditions_met():
+            self._armed_dialog()
             return
         date_str = self.view_date.get().strip()
         time_str = self.time_entry.get().strip() or datetime.now().strftime("%H:%M")

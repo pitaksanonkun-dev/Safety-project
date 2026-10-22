@@ -16,6 +16,7 @@ file can be imported into the recipient list to decrypt-to that person.
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 import fitz
@@ -134,38 +135,83 @@ def export_png(public_raw: bytes, out_path) -> tuple[Path, str]:
     return out_path, fp
 
 
-def read_png(path) -> bytes:
-    """Return the embedded public_raw bytes, or raise ValueError if none/invalid."""
-    data = Path(path).read_bytes()
-    enc = None
+_PK_RE = re.compile(r"DOCORGPK1:[A-Za-z0-9_\-]+")
 
+
+def _token(text):
+    """Pull a DOCORGPK1:... public-key string out of arbitrary text, or None."""
+    if not text:
+        return None
+    m = _PK_RE.search(text)
+    return m.group(0) if m else None
+
+
+def _decode_image(data: bytes):
+    """Find the key in an image (PNG/JPG bytes): tEXt chunk, trailer, then QR."""
     # 1) PNG tEXt chunk
     try:
         img = Image.open(io.BytesIO(data))
         enc = (getattr(img, "text", {}) or {}).get(PNG_TEXT_KEY) \
             or (img.info or {}).get(PNG_TEXT_KEY)
+        if enc:
+            return enc
     except Exception:
-        enc = None
-
+        pass
     # 2) appended trailer
-    if not enc:
-        i = data.rfind(PNG_MARKER)
-        if i != -1:
-            body = data[i + len(PNG_MARKER):]
-            if len(body) >= 4:
-                n = int.from_bytes(body[:4], "big")
-                enc = body[4:4 + n].decode("utf-8", "ignore")
-
+    i = data.rfind(PNG_MARKER)
+    if i != -1:
+        body = data[i + len(PNG_MARKER):]
+        if len(body) >= 4:
+            n = int.from_bytes(body[:4], "big")
+            enc = body[4:4 + n].decode("utf-8", "ignore")
+            if _token(enc):
+                return _token(enc)
     # 3) QR (survives chat recompression)
-    if not enc:
-        try:
-            enc = qr_pointer.read_text_from_image_bytes(data)
-        except Exception:
-            enc = None
+    try:
+        return _token(qr_pointer.read_text_from_image_bytes(data))
+    except Exception:
+        return None
 
+
+def _decode_pdf(data: bytes):
+    """Find the key in a PDF: metadata, embedded files, then page-rendered QR."""
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        md = doc.metadata or {}
+        for field in ("keywords", "subject", "title"):
+            tok = _token(md.get(field))
+            if tok:
+                return tok
+        try:
+            for name in doc.embfile_names():
+                tok = _token(bytes(doc.embfile_get(name)).decode("utf-8", "ignore"))
+                if tok:
+                    return tok
+        except Exception:
+            pass
+        for pno in range(min(doc.page_count, 3)):
+            png = doc[pno].get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes("png")
+            tok = _token(qr_pointer.read_text_from_image_bytes(png))
+            if tok:
+                return tok
+    finally:
+        doc.close()
+    return None
+
+
+def read_pubkey(path) -> bytes:
+    """Return the embedded public_raw bytes from a PNG/JPG OR PDF, or raise."""
+    data = Path(path).read_bytes()
+    is_pdf = str(path).lower().endswith(".pdf") or data[:5] == b"%PDF-"
+    enc = _decode_pdf(data) if is_pdf else _decode_image(data)
+    if not enc:                      # cross-try in case the extension was wrong
+        enc = _decode_image(data) if is_pdf else _decode_pdf(data)
     if not enc:
         raise ValueError("ไม่พบ public key ในไฟล์นี้ (อาจไม่ใช่ไฟล์กุญแจของระบบ)")
     return recipient_crypto.decode_public(enc)        # validates + returns raw
+
+
+read_png = read_pubkey            # backward-compatible alias
 
 
 if __name__ == "__main__":

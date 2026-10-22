@@ -994,12 +994,13 @@ class VaultApp(ctk.CTk):
 
         def import_file():
             path = filedialog.askopenfilename(
-                title="เลือกไฟล์กุญแจ (PNG การ์ดข้อพระคัมภีร์)",
-                filetypes=[("รูปภาพ PNG/JPG", "*.png *.jpg *.jpeg"), ("All files", "*.*")])
+                title="เลือกไฟล์กุญแจ (PNG / PDF ข้อพระคัมภีร์)",
+                filetypes=[("ไฟล์กุญแจ PNG/PDF", "*.png *.jpg *.jpeg *.pdf"),
+                           ("All files", "*.*")])
             if not path:
                 return
             try:
-                pub = pubkey_image.read_png(path)
+                pub = pubkey_image.read_pubkey(path)
             except Exception as exc:
                 messagebox.showwarning("นำเข้าไม่สำเร็จ", str(exc), parent=win)
                 return
@@ -1026,7 +1027,7 @@ class VaultApp(ctk.CTk):
             btns.columnconfigure(i, weight=1, uniform="contacts_btns")
         ctk.CTkButton(btns, text="เพิ่มผู้รับ (Add)", command=add).grid(
             row=0, column=0, sticky="ew", padx=(0, 4))
-        ctk.CTkButton(btns, text="นำเข้าจากไฟล์ (PNG)", fg_color="#2d7d46",
+        ctk.CTkButton(btns, text="นำเข้าไฟล์จาก (PNG/PDF)", fg_color="#2d7d46",
                       hover_color="#236138", command=import_file).grid(
             row=0, column=1, sticky="ew", padx=4)
         ctk.CTkButton(btns, text="เสร็จสิ้น", fg_color="gray30", hover_color="gray25",

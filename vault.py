@@ -123,8 +123,19 @@ class VaultStore:
         tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
         tmp.replace(self.config_path)
 
+    # ---- node-locking (optional machine binding) ----------------------
+    @staticmethod
+    def _bind(password: str, node_lock: bool) -> str:
+        """Mix the machine DNA into the password when a slot is node-locked, so
+        the KEK only derives on the authorised machine (fail-closed). No data is
+        ever destroyed — a wrong machine just can't unwrap the DK."""
+        if not node_lock:
+            return password
+        import machine_id
+        return f"{password}\x00{machine_id.machine_dna()}"
+
     # ---- creating a vault / password slot -----------------------------
-    def create_vault(self, password: str) -> OpenVault:
+    def create_vault(self, password: str, node_lock: bool = False) -> OpenVault:
         """
         Create a new vault with a fresh random DK and a password slot that
         wraps it. Returns it opened. Slots carry no 'real'/'decoy' label on
@@ -136,12 +147,13 @@ class VaultStore:
         vault_id = uuid.uuid4().hex
         dk = secrets.token_bytes(_DK_LEN)
         salt = secrets.token_bytes(16)
-        kek = derive_key(password, salt)
+        kek = derive_key(self._bind(password, node_lock), salt)
 
         slot = {
             "vault_id": vault_id,
             "salt": salt.hex(),
             "wrapped_dk": _seal(kek, dk),
+            "node": bool(node_lock),
         }
         cfg["slots"].append(slot)
         self._write_config(cfg)
@@ -153,30 +165,76 @@ class VaultStore:
         self._save_index(ov, {"files": {}})
         return ov
 
-    def add_password(self, existing: OpenVault, new_password: str) -> None:
+    def add_password(self, existing: OpenVault, new_password: str,
+                     node_lock: bool = False) -> None:
         """Add another password slot that opens the SAME vault (optional)."""
         cfg = self._read_config()
         salt = secrets.token_bytes(16)
-        kek = derive_key(new_password, salt)
+        kek = derive_key(self._bind(new_password, node_lock), salt)
         cfg["slots"].append({
             "vault_id": existing.vault_id,
             "salt": salt.hex(),
             "wrapped_dk": _seal(kek, existing.dk),
+            "node": bool(node_lock),
         })
         self._write_config(cfg)
 
     # ---- unlocking ----------------------------------------------------
     def unlock(self, password: str) -> OpenVault | None:
-        """Try the password against every slot; return the vault it opens."""
+        """Try the password against every slot; return the vault it opens.
+        A node-locked slot only opens on its authorised machine."""
         cfg = self._read_config()
         for slot in cfg["slots"]:
-            kek = derive_key(password, bytes.fromhex(slot["salt"]))
+            kek = derive_key(self._bind(password, slot.get("node", False)),
+                             bytes.fromhex(slot["salt"]))
             try:
                 dk = _open(kek, slot["wrapped_dk"])
             except InvalidTag:
-                continue  # not this slot
+                continue  # not this slot (wrong password, or wrong machine)
             return OpenVault(self, slot["vault_id"], dk)
         return None
+
+    def node_locked_for(self, password: str):
+        """Return True/False if a slot opens with `password` (on this machine),
+        telling whether it is node-locked; None if no slot opens."""
+        cfg = self._read_config()
+        for slot in cfg["slots"]:
+            node = slot.get("node", False)
+            kek = derive_key(self._bind(password, node), bytes.fromhex(slot["salt"]))
+            try:
+                _open(kek, slot["wrapped_dk"])
+            except InvalidTag:
+                continue
+            return node
+        return None
+
+    def set_node_lock(self, password: str, enable: bool) -> bool:
+        """Re-wrap the slot that `password` opens so it is (or isn't) bound to
+        THIS machine. Returns True if a slot was updated. Only changes the key
+        wrapping — the data and its DK are untouched."""
+        cfg = self._read_config()
+        for slot in cfg["slots"]:
+            salt = bytes.fromhex(slot["salt"])
+            cur = slot.get("node", False)
+            # find the matching slot by trying its current binding (then the other)
+            dk = None
+            for node_try in (cur, not cur):
+                try:
+                    dk = _open(derive_key(self._bind(password, node_try), salt),
+                               slot["wrapped_dk"])
+                    break
+                except InvalidTag:
+                    continue
+            if dk is None:
+                continue
+            new_salt = secrets.token_bytes(16)
+            new_kek = derive_key(self._bind(password, enable), new_salt)
+            slot["salt"] = new_salt.hex()
+            slot["wrapped_dk"] = _seal(new_kek, dk)
+            slot["node"] = bool(enable)
+            self._write_config(cfg)
+            return True
+        return False
 
     def unlock_with_shares(self, vault_id: str,
                            shares: list[tuple[int, bytes]]) -> OpenVault:

@@ -348,6 +348,8 @@ class VaultApp(ctk.CTk):
         setmenu.add_separator()
         setmenu.add_command(label="ตั้งรหัสช่องทางลับ (แอป Health)…   (Set hidden-channel password)",
                             command=self._menu_set_health_secret)
+        setmenu.add_command(label="ผูก vault กับเครื่องนี้ (Node-lock)…   (Bind to this machine)",
+                            command=self._menu_node_lock)
         setmenu.add_command(label="สร้างชุดแจกจ่ายสำหรับเครื่องอื่น…   (Export portable copy)",
                             command=self._menu_export_portable)
         menubar.add_cascade(label="ตั้งค่า / Settings", menu=setmenu)
@@ -1275,6 +1277,69 @@ class VaultApp(ctk.CTk):
                  else ["xdg-open", str(path)]))
         except Exception as exc:
             messagebox.showerror("Open folder", f"เปิดโฟลเดอร์ไม่ได้:\n{exc}")
+
+    def _menu_node_lock(self):
+        """Bind / unbind this vault to the current machine (fail-closed, no wipe)."""
+        if self.ov is None or not self.password:
+            messagebox.showwarning("Locked", "กรุณา login ก่อน")
+            return
+        import machine_id
+        dna = machine_id.machine_dna_short()
+        locked = self.store.node_locked_for(self.password)
+
+        win = ctk.CTkToplevel(self)
+        win.title("ผูก vault กับเครื่องนี้ (Node-lock)")
+        win.geometry("520x380")
+        win.configure(fg_color="#141414")
+        ctk.CTkLabel(win, text="ผูก vault ให้ใช้ได้เฉพาะเครื่องนี้",
+                     font=ctk.CTkFont(size=15, weight="bold"),
+                     text_color="#f2f4f7").pack(pady=(16, 2))
+        ctk.CTkLabel(win, text=f"รหัสเครื่องนี้ (Machine DNA): {dna}",
+                     text_color="#e6b800").pack(pady=(0, 4))
+        state = ("สถานะ: 🔒 ผูกกับเครื่องนี้แล้ว" if locked
+                 else "สถานะ: 🔓 ยังไม่ผูก (เปิดได้ทุกเครื่องถ้ารู้รหัส)")
+        status_lbl = ctk.CTkLabel(win, text=state, text_color="#aab2bd")
+        status_lbl.pack(pady=(0, 8))
+        ctk.CTkLabel(
+            win, wraplength=470, justify="left", text_color="#8a9099",
+            font=ctk.CTkFont(size=11),
+            text=("เมื่อผูกแล้ว เครื่องอื่นจะเปิด vault ไม่ได้แม้รู้รหัส (fail-closed) "
+                  "โดยไม่มีการลบ/ทำลายข้อมูลใด ๆ\n\n"
+                  "⚠️ สำคัญ: ถ้าเปลี่ยนเมนบอร์ด/การ์ดเน็ต หรือย้ายเครื่อง รหัสเครื่องจะเปลี่ยน "
+                  "และจะเข้าด้วยรหัสผ่านไม่ได้ ให้กู้ด้วย 'Backup key' (Shamir) ซึ่งใช้ได้ทุกเครื่อง "
+                  "— จึงควรสร้าง Backup key เก็บไว้ก่อนผูก")
+            ).pack(padx=18, pady=(0, 10))
+
+        def do(enable):
+            try:
+                ok = self.store.set_node_lock(self.password, enable)
+            except Exception as exc:
+                messagebox.showerror("Node-lock", str(exc), parent=win)
+                return
+            win.destroy()
+            if ok:
+                self._show_success(
+                    "ผูกกับเครื่องนี้แล้ว" if enable else "ยกเลิกการผูกแล้ว",
+                    (f"ตอนนี้ vault เปิดได้เฉพาะเครื่องนี้ (DNA {dna})\n"
+                     "เครื่องอื่นจะเปิดไม่ได้ (กู้ด้วย Backup key ได้)")
+                    if enable else
+                    "ตอนนี้ vault เปิดได้ทุกเครื่องที่รู้รหัสผ่าน")
+            else:
+                messagebox.showwarning("Node-lock", "ไม่พบ slot ที่ตรงกับรหัสผ่าน", parent=self)
+
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(pady=(4, 14))
+        if locked:
+            ctk.CTkButton(row, text="ยกเลิกการผูก (ใช้ได้ทุกเครื่อง)", width=260,
+                          fg_color="#a3332f", hover_color="#7d2420",
+                          command=lambda: do(False)).pack()
+        else:
+            ctk.CTkButton(row, text="ผูกกับเครื่องนี้เลย", width=220, fg_color="#2d7d46",
+                          hover_color="#236138", command=lambda: do(True)).pack()
+        try:
+            win.transient(self); win.grab_set(); win.lift()
+        except Exception:
+            pass
 
     def _return_to_health(self):
         """Close the vault and return to the Health cover app (main() reopens it)."""

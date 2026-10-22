@@ -91,10 +91,10 @@ def do_install(dest_dir: Path, desktop: bool, startmenu: bool,
             progress("กำลังผูกกับเครื่องที่อนุญาต (DNA)…", 0.5)
         try:
             import node_guard
-            # embed INSIDE the exe (can't be removed by deleting a file) …
+            # Bind by embedding INSIDE the exe only — no separate node_authorized.json
+            # (which would look like a deletable lock). The embedded binding can't be
+            # removed by deleting a file.
             node_guard.embed_into_exe(target, authorized)
-            # … plus a readable record next to it
-            node_guard.write_guard(dest_dir, authorized, note="bound by installer")
         except Exception:
             pass
 

@@ -16,10 +16,13 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import sys
+
 import app_paths
 import machine_id
 
 GUARD_NAME = "node_authorized.json"
+DNA_MAGIC = b"DOCORGDNA1"          # marks the DNA binding appended inside the .exe
 
 
 def guard_file() -> Path | None:
@@ -29,16 +32,65 @@ def guard_file() -> Path | None:
     return app_paths.exe_dir() / GUARD_NAME
 
 
-def authorized_set(path: Path | None = None):
+def _file_authorized(path: Path | None = None):
+    """Authorised DNAs from the (deletable) node_authorized.json, if present."""
     p = path or guard_file()
     if not p or not p.exists():
-        return None
+        return set()
     try:
         data = json.loads(p.read_text("utf-8"))
+        return {h.lower() for h in (data.get("authorized") or []) if h}
     except Exception:
-        return None
-    hashes = {h.lower() for h in (data.get("authorized") or []) if h}
-    return hashes or None
+        return set()
+
+
+# --- DNA binding embedded INSIDE the .exe (can't be bypassed by deleting a file) ---
+# Trailer layout, appended to the very end of the exe:
+#   DNA_MAGIC | json | len(json, 4 bytes big-endian) | DNA_MAGIC
+def _read_exe_trailer(exe_path):
+    try:
+        with open(exe_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            n = min(size, 65536)
+            f.seek(size - n)
+            tail = f.read(n)
+    except Exception:
+        return set()
+    if tail[-len(DNA_MAGIC):] != DNA_MAGIC:
+        return set()
+    try:
+        ln = int.from_bytes(tail[-len(DNA_MAGIC) - 4:-len(DNA_MAGIC)], "big")
+        end = len(tail) - len(DNA_MAGIC) - 4
+        data = tail[end - ln:end]
+        if tail[end - ln - len(DNA_MAGIC):end - ln] != DNA_MAGIC:
+            return set()
+        return {h.lower() for h in json.loads(data).get("authorized", []) if h}
+    except Exception:
+        return set()
+
+
+def embedded_authorized():
+    """Authorised DNAs embedded in THIS running .exe (frozen only)."""
+    if not app_paths.is_frozen():
+        return set()
+    return _read_exe_trailer(sys.executable)
+
+
+def embed_into_exe(exe_path, authorized: list[str]) -> None:
+    """Append a DNA binding to an .exe so the lock can't be removed by deleting a
+    separate file. (Appending leaves the PyInstaller archive readable.)"""
+    data = json.dumps({"authorized": sorted({h.lower() for h in authorized if h})}
+                      ).encode("utf-8")
+    with open(exe_path, "ab") as f:
+        f.write(DNA_MAGIC + data + len(data).to_bytes(4, "big") + DNA_MAGIC)
+
+
+def authorized_set(path: Path | None = None):
+    """Union of DNAs bound via the embedded trailer AND the json file; None if the
+    install carries no binding at all."""
+    s = embedded_authorized() | _file_authorized(path)
+    return s or None
 
 
 def write_guard(dest_dir, authorized: list[str], note: str = "") -> Path:

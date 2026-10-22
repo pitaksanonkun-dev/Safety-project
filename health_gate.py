@@ -812,6 +812,15 @@ class HealthApp(ctk.CTk):
 
 
 def main():
+    # If this installed copy was bound to specific machine(s), refuse to run on
+    # any other one (fail-closed, no data touched).
+    try:
+        import node_guard
+        node_guard.enforce_or_exit()
+    except SystemExit:
+        raise
+    except Exception:
+        pass
     # Loop so the vault's "← Health" button can return to the cover app, and the
     # cover's hidden channel can re-open the vault, without ever exiting.
     while True:

@@ -13,7 +13,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [("dist/Health & Wellness.exe", ".")]     # payload -> _MEIPASS root
 binaries = []
-hiddenimports = ["machine_id"]
+hiddenimports = ["machine_id", "node_guard", "app_paths"]
 
 for pkg in ["customtkinter"]:
     try:

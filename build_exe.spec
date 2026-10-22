@@ -43,7 +43,8 @@ for pkg in [
 hiddenimports += ["gui", "verse_card", "pdf_disguise", "drive_client",
                   "recipient_crypto", "file_crypto", "crypto_vault",
                   "secret_sharing", "vault", "qr_pointer", "make_portable",
-                  "app_paths", "hidden_config", "pubkey_image", "machine_id"]
+                  "app_paths", "hidden_config", "pubkey_image", "machine_id",
+                  "node_guard"]
 
 a = Analysis(
     ["health_gate.py"],

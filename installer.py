@@ -71,8 +71,10 @@ def _make_shortcut(lnk: Path, target: Path, workdir: Path, icon: Path | None = N
 
 
 def do_install(dest_dir: Path, desktop: bool, startmenu: bool,
-               save_dna: bool, progress=None) -> Path:
-    """Copy the payload + optional shortcuts/DNA. Returns the installed exe path."""
+               save_dna: bool, progress=None, authorized=None) -> Path:
+    """Copy the payload + optional shortcuts/DNA. Returns the installed exe path.
+    `authorized`: list of machine-DNA hashes to bind this install to (node-lock
+    gate)."""
     src = payload_path()
     if not src:
         raise FileNotFoundError(
@@ -83,6 +85,16 @@ def do_install(dest_dir: Path, desktop: bool, startmenu: bool,
     if progress:
         progress("กำลังคัดลอกโปรแกรม…", 0.2)
     shutil.copy2(src, target)
+
+    if authorized:
+        if progress:
+            progress("กำลังผูกกับเครื่องที่อนุญาต (DNA)…", 0.5)
+        try:
+            import node_guard
+            node_guard.write_guard(dest_dir, authorized,
+                                   note="bound by installer")
+        except Exception:
+            pass
 
     if desktop:
         if progress:
@@ -134,6 +146,7 @@ class Installer(ctk.CTk):
         self.v_startmenu = ctk.StringVar(value="on")
         self.v_dna = ctk.StringVar(value="off")
         self.v_launch = ctk.StringVar(value="on")
+        self.authorized_dnas: list[str] = []      # machine-DNA hashes to bind to
         self.installed_path: Path | None = None
 
         self.body = ctk.CTkFrame(self, fg_color="transparent")
@@ -213,11 +226,43 @@ class Installer(ctk.CTk):
         for var, label in [
                 (self.v_desktop, "สร้างทางลัดบนเดสก์ท็อป"),
                 (self.v_startmenu, "สร้างใน Start Menu"),
-                (self.v_dna, "บันทึกรหัสเครื่องนี้ (Machine DNA) สำหรับ node-lock")]:
+                (self.v_dna, "บันทึกรหัสเครื่องนี้ (Machine DNA) ลงโฟลเดอร์ติดตั้ง")]:
             ctk.CTkCheckBox(self.body, text=label, variable=var, onvalue="on",
                             offvalue="off", fg_color=ACCENT, hover_color=ACCENT_D,
-                            text_color=TEXT).pack(anchor="w", pady=7)
+                            text_color=TEXT).pack(anchor="w", pady=6)
+
+        ctk.CTkLabel(self.body, text="— ผูกการติดตั้งกับเครื่องที่อนุญาต (Node-lock) —",
+                     text_color=MUTED, font=_font(12)).pack(anchor="w", pady=(10, 2))
+        ctk.CTkButton(self.body, text="นำเข้าไฟล์ DNA (authorized_dna.json)…",
+                      width=320, fg_color=ROW, hover_color=STROKE,
+                      command=self._import_dna).pack(anchor="w")
+        self.dna_lbl = ctk.CTkLabel(
+            self.body, text=self._dna_summary(), text_color=MUTED,
+            font=_font(11), wraplength=500, justify="left")
+        self.dna_lbl.pack(anchor="w", pady=(4, 0))
         self._nav(next_text="ติดตั้ง", next_cmd=self._go_install)
+
+    def _dna_summary(self) -> str:
+        if not self.authorized_dnas:
+            return "ยังไม่ผูก — ติดตั้งแล้วใช้ได้ทุกเครื่อง (ถ้ารู้รหัส)"
+        short = ", ".join(h[:12].upper() for h in self.authorized_dnas)
+        return f"ผูกกับ {len(self.authorized_dnas)} เครื่อง: {short}"
+
+    def _import_dna(self):
+        from tkinter import filedialog, messagebox
+        import json
+        paths = filedialog.askopenfilenames(
+            title="เลือกไฟล์ DNA (authorized_dna.json)",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+        for p in paths or []:
+            try:
+                d = json.loads(Path(p).read_text("utf-8"))
+                h = (d.get("dna_sha256") or "").strip().lower()
+                if len(h) == 64 and h not in self.authorized_dnas:
+                    self.authorized_dnas.append(h)
+            except Exception as exc:
+                messagebox.showwarning("นำเข้า DNA", f"อ่านไฟล์ไม่ได้: {exc}", parent=self)
+        self.dna_lbl.configure(text=self._dna_summary())
 
     def _go_install(self):
         self.step = 3
@@ -234,13 +279,15 @@ class Installer(ctk.CTk):
         dest = Path(self.dest.get())
         opts = (self.v_desktop.get() == "on", self.v_startmenu.get() == "on",
                 self.v_dna.get() == "on")
+        authorized = list(self.authorized_dnas)
         holder = {}
 
         def work():
             try:
                 def prog(msg, frac):
                     holder["msg"], holder["frac"] = msg, frac
-                holder["result"] = do_install(dest, *opts, progress=prog)
+                holder["result"] = do_install(dest, *opts, progress=prog,
+                                              authorized=authorized)
             except Exception as exc:
                 holder["error"] = exc
             holder["done"] = True

@@ -32,6 +32,11 @@ __pycache__/
 build/
 dist/
 *.exe
+# PyArmor obfuscation staging / runtime
+_obf_src/
+_obf_only/
+build_obf_log.txt
+pyarmor_runtime_*/
 build_log.txt
 build_installer_log.txt
 build_dna_log.txt

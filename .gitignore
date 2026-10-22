@@ -33,7 +33,10 @@ build/
 dist/
 *.exe
 build_log.txt
+build_installer_log.txt
 selftest_result.txt
+# machine fingerprint dump (reveals this machine's MAC/UUID)
+authorized_dna.json
 # the clean "portable" copies this project can generate
 Document Organizer (portable) */
 

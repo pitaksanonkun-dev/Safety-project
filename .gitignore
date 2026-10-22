@@ -34,7 +34,9 @@ dist/
 *.exe
 build_log.txt
 build_installer_log.txt
+build_dna_log.txt
 selftest_result.txt
+node_authorized.json
 # machine fingerprint dump (reveals this machine's MAC/UUID)
 authorized_dna.json
 # the clean "portable" copies this project can generate

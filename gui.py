@@ -1021,13 +1021,16 @@ class VaultApp(ctk.CTk):
                                 f"นำเข้าผู้รับ '{name}' แล้ว\nKey: {fp}", parent=win)
 
         btns = ctk.CTkFrame(win, fg_color="transparent")
-        btns.pack(pady=(4, 6))
-        ctk.CTkButton(btns, text="เพิ่มผู้รับ (Add)", width=160, command=add).pack(
-            side="left", padx=5)
-        ctk.CTkButton(btns, text="นำเข้าจากไฟล์ (PNG)", width=170, fg_color="#2d7d46",
-                      hover_color="#236138", command=import_file).pack(side="left", padx=5)
-        ctk.CTkButton(win, text="เสร็จสิ้น", width=120,
-                      command=win.destroy).pack(pady=(0, 12))
+        btns.pack(fill="x", padx=14, pady=(6, 12))
+        for i in range(3):
+            btns.columnconfigure(i, weight=1, uniform="contacts_btns")
+        ctk.CTkButton(btns, text="เพิ่มผู้รับ (Add)", command=add).grid(
+            row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkButton(btns, text="นำเข้าจากไฟล์ (PNG)", fg_color="#2d7d46",
+                      hover_color="#236138", command=import_file).grid(
+            row=0, column=1, sticky="ew", padx=4)
+        ctk.CTkButton(btns, text="เสร็จสิ้น", fg_color="gray30", hover_color="gray25",
+                      command=win.destroy).grid(row=0, column=2, sticky="ew", padx=(4, 0))
 
         refresh()
         try:

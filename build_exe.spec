@@ -18,7 +18,8 @@ Notes
 
 from PyInstaller.utils.hooks import collect_all
 
-datas = [("card_template.png", "."), ("fonts", "fonts")]
+datas = [("card_template.png", "."), ("bible_key_template.png", "."),
+         ("fonts", "fonts")]
 binaries = []
 hiddenimports = []
 

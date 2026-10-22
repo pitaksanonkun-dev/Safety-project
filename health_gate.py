@@ -234,10 +234,22 @@ class HealthApp(ctk.CTk):
         self._build_settings(self.tabs.tab("ตั้งค่า"))
 
     def _apply_theme(self, mode: str):
+        if self.data.get("theme") == mode:
+            return                     # already on this theme — nothing to do
+        # remember the open tab so switching theme stays on the current page
+        try:
+            current = self.tabs.get()
+        except Exception:
+            current = None
         self.data["theme"] = mode
         _save(self.data)
         apply_palette(mode)
         self._build_ui()               # rebuild everything with the new colors
+        if current:
+            try:
+                self.tabs.set(current)
+            except Exception:
+                pass
 
     def _conditions_met(self) -> bool:
         """The hidden channel only arms when notifications are OFF and the theme

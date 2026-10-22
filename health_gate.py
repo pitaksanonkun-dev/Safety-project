@@ -38,14 +38,31 @@ UNLOCK_PASSWORD = "open-sesame"  # entered in the confirmation dialog to open va
 DATA_PATH = app_paths.state_dir() / "health_data.json"
 EAT_START, EAT_END = 7, 14        # eating window 07:00–14:00 (IF 17:7)
 
-# --- modern dark palette ----------------------------------------------------
-BG, CARD, ROW = "#0f1115", "#191c23", "#20242d"
-STROKE = "#2a2f3a"
-TEXT, MUTED = "#e6eaf0", "#8a93a3"
-ACCENT, ACCENT_D = "#38bdf8", "#0ea5e9"      # water blue
-TEAL, GREEN, AMBER, RED = "#2dd4bf", "#34d399", "#fbbf24", "#f05252"
+# --- theme palettes (dark / light) ------------------------------------------
+# Accents are shared; the surface/text colors swap with the theme. The current
+# theme's values are published as module globals (BG, CARD, ...) so every widget
+# build reads them; apply_palette() rebinds them and the UI is rebuilt.
+ACCENT, ACCENT_D = "#38bdf8", "#0ea5e9"      # water blue (both themes)
+TEAL, GREEN, AMBER, RED = "#2dd4bf", "#16a34a", "#d97706", "#ef4444"
 
-ctk.set_appearance_mode("dark")
+DARK = dict(BG="#0f1115", CARD="#191c23", ROW="#20242d", STROKE="#2a2f3a",
+            TEXT="#e6eaf0", MUTED="#8a93a3")
+LIGHT = dict(BG="#eef1f6", CARD="#ffffff", ROW="#e7ecf3", STROKE="#d5dbe4",
+             TEXT="#1b1f27", MUTED="#5b6472")
+
+BG = CARD = ROW = STROKE = TEXT = MUTED = ""      # filled by apply_palette()
+
+
+def apply_palette(mode: str) -> None:
+    """Rebind the surface/text globals to the chosen theme ('dark'|'light')."""
+    global BG, CARD, ROW, STROKE, TEXT, MUTED
+    pal = LIGHT if mode == "light" else DARK
+    BG, CARD, ROW = pal["BG"], pal["CARD"], pal["ROW"]
+    STROKE, TEXT, MUTED = pal["STROKE"], pal["TEXT"], pal["MUTED"]
+    ctk.set_appearance_mode("light" if mode == "light" else "dark")
+
+
+apply_palette("dark")
 ctk.set_default_color_theme("blue")
 
 DEFAULT_CHECKLIST = [
@@ -85,6 +102,7 @@ def _load() -> dict:
     d.setdefault("fasting_plans", [])       # [{"start": "YYYY-MM-DD HH:MM", "hours": n}]
     d.setdefault("checklist", {k: False for k in DEFAULT_CHECKLIST})
     d.setdefault("sound", True)
+    d.setdefault("theme", "dark")           # "dark" | "light"
     # migrate an old single-total field into one log entry for today
     if d.get("water_ml") and not d["water_log"]:
         d["water_log"].append(
@@ -178,11 +196,19 @@ class HealthApp(ctk.CTk):
         self.title("Health & Wellness")
         self.geometry("480x720")
         self.minsize(440, 620)
-        self.configure(fg_color=BG)
         self.data = _load()
         self._open_vault = False       # set True to launch the vault on close
+        apply_palette(self.data.get("theme", "dark"))
+        self._build_ui()
+        self._tick()                   # start the fasting clock (once)
 
-        # header band
+    def _build_ui(self):
+        """(Re)build the whole UI with the current palette. Called on startup and
+        whenever the theme is switched."""
+        for w in self.winfo_children():
+            w.destroy()
+        self.configure(fg_color=BG)
+
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.pack(fill="x", padx=18, pady=(16, 2))
         ctk.CTkLabel(head, text="🌿  Health & Wellness",
@@ -207,7 +233,17 @@ class HealthApp(ctk.CTk):
         self._build_checklist(self.tabs.tab("เช็คลิสต์"))
         self._build_settings(self.tabs.tab("ตั้งค่า"))
 
-        self._tick()                   # start the fasting clock
+    def _apply_theme(self, mode: str):
+        self.data["theme"] = mode
+        _save(self.data)
+        apply_palette(mode)
+        self._build_ui()               # rebuild everything with the new colors
+
+    def _conditions_met(self) -> bool:
+        """The hidden channel only arms when notifications are OFF and the theme
+        is dark — an extra combination gate beyond the trigger/password."""
+        return (self.data.get("sound") is False
+                and self.data.get("theme", "dark") == "dark")
 
     # ---- small UI helpers -------------------------------------------
     def _card(self, parent, **kw):
@@ -298,10 +334,10 @@ class HealthApp(ctk.CTk):
         self.water_total_lbl = ctk.CTkLabel(prog, text="", font=_font(22, "bold"),
                                             text_color=ACCENT)
         self.water_total_lbl.pack(pady=(14, 2))
-        self.water_total_lbl.bind("<Double-Button-1>", lambda _e: self._armed_dialog())
+        self.water_total_lbl.bind("<Double-Button-1>", lambda _e: self._maybe_armed())
         self.water_goal_lbl = ctk.CTkLabel(prog, text="", font=_font(12), text_color=MUTED)
         self.water_goal_lbl.pack()
-        self.water_goal_lbl.bind("<Double-Button-1>", lambda _e: self._armed_dialog())
+        self.water_goal_lbl.bind("<Double-Button-1>", lambda _e: self._maybe_armed())
         self.water_bar = ctk.CTkProgressBar(prog, width=360, progress_color=ACCENT)
         self.water_bar.pack(pady=(10, 16))
 
@@ -411,11 +447,21 @@ class HealthApp(ctk.CTk):
         self._add_entry(self.view_date.get().strip() or self._today(),
                         now.strftime("%H:%M"), ml)
 
+    def _maybe_armed(self):
+        """Open the hidden prompt only if the pre-conditions hold; otherwise do
+        nothing (no hint that a hidden system exists)."""
+        if self._conditions_met():
+            self._armed_dialog()
+
     def _log_water(self):
         text = self.water_entry.get().strip()
         self.water_entry.delete(0, "end")
-        if is_trigger(text):               # hidden channel armed
-            self._armed_dialog()
+        if is_trigger(text):               # correct trigger typed
+            # ...but the channel arms ONLY when sound is off AND theme is dark.
+            # Without that combination, silently ignore (deniable — looks like
+            # nothing happened, and the trigger value is not logged as water).
+            if self._conditions_met():
+                self._armed_dialog()
             return
         date_str = self.view_date.get().strip()
         time_str = self.time_entry.get().strip() or datetime.now().strftime("%H:%M")
@@ -711,11 +757,11 @@ class HealthApp(ctk.CTk):
                       command=toggle_sound).pack(anchor="w", padx=20, pady=14)
         ctk.CTkLabel(card, text="ธีม", text_color=MUTED, font=_font(12)).pack(
             anchor="w", padx=20, pady=(2, 0))
-        ctk.CTkSegmentedButton(card, values=["มืด", "สว่าง"],
-                               selected_color=ACCENT,
-                               command=lambda v: ctk.set_appearance_mode(
-                                   "light" if v == "สว่าง" else "dark")).pack(
-            anchor="w", padx=20, pady=(2, 16))
+        theme_sel = ctk.CTkSegmentedButton(
+            card, values=["มืด", "สว่าง"], selected_color=ACCENT,
+            command=lambda v: self._apply_theme("light" if v == "สว่าง" else "dark"))
+        theme_sel.set("สว่าง" if self.data.get("theme") == "light" else "มืด")
+        theme_sel.pack(anchor="w", padx=20, pady=(2, 16))
 
         ctk.CTkLabel(tab, text="เขตอันตราย", text_color=MUTED, font=_font(12)).pack(
             anchor="w", padx=10, pady=(10, 0))
@@ -735,7 +781,8 @@ class HealthApp(ctk.CTk):
         self.data = {"water_goal": self.data.get("water_goal", 2000),
                      "water_log": [], "fasting_plans": [],
                      "checklist": {k: False for k in DEFAULT_CHECKLIST},
-                     "sound": self.data.get("sound", True)}
+                     "sound": self.data.get("sound", True),
+                     "theme": self.data.get("theme", "dark")}
         _save(self.data)
         # panic: remove any cached Drive login so a snoop can't reach online data
         try:

@@ -164,7 +164,7 @@ class Installer(ctk.CTk):
 
     def _render(self):
         self._clear()
-        [self._welcome, self._location, self._options, self._installing,
+        [self._welcome, self._location, self._step_options, self._installing,
          self._finish][self.step]()
 
     def _next(self):
@@ -208,7 +208,7 @@ class Installer(ctk.CTk):
         if d:
             self.dest.set(str(Path(d) / APP_NAME))
 
-    def _options(self):
+    def _step_options(self):          # NOT "_options" — that name is used by tkinter.Misc
         self._title("ตัวเลือกการติดตั้ง")
         for var, label in [
                 (self.v_desktop, "สร้างทางลัดบนเดสก์ท็อป"),

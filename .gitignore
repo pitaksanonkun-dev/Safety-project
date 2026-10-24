@@ -54,6 +54,9 @@ Document Organizer (portable) */
 คู่มือช่องทางลับ*.pdf
 *SECRET*.pdf
 make_secret_manual.py
+# PRIVATE: security summary (names the hidden-channel conditions) + its generator
+สรุปมาตรการความปลอดภัย*.pdf
+make_security_summary.py
 
 # Test / scratch artifacts
 _t/
